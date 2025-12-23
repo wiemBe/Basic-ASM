@@ -303,7 +303,6 @@ class ScanManager:
             self.end_time = datetime.now()
         finally:
             # Clear active scan ID when done
-            global current_scan_id
             current_scan_id = None
 
 
