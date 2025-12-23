@@ -1037,18 +1037,18 @@ def module_api_discovery(output_dir, depth=3, crawl_duration=300):
     # Additional: Extract potential secrets patterns from JS files (basic)
     secrets_file = api_dir / "potential_secrets.txt"
     secret_patterns = [
-        (r'["\']?api[_-]?key["\']?\s*[:=]\s*["\'][^"\']+',' 'API Key'),
-        (r'["\']?secret[_-]?key["\']?\s*[:=]\s*["\'][^"\']+',' 'Secret Key'),
-        (r'["\']?password["\']?\s*[:=]\s*["\'][^"\']+',' 'Password'),
-        (r'["\']?token["\']?\s*[:=]\s*["\'][^"\']+',' 'Token'),
-        (r'["\']?auth[_-]?token["\']?\s*[:=]\s*["\'][^"\']+',' 'Auth Token'),
-        (r'["\']?access[_-]?token["\']?\s*[:=]\s*["\'][^"\']+',' 'Access Token'),
-        (r'["\']?client[_-]?secret["\']?\s*[:=]\s*["\'][^"\']+',' 'Client Secret'),
-        (r'["\']?private[_-]?key["\']?\s*[:=]\s*["\'][^"\']+',' 'Private Key'),
-        (r'Bearer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+',' 'JWT Token'),
-        (r'eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+',' 'JWT'),
-        (r'AKIA[0-9A-Z]{16}',' 'AWS Access Key'),
-        (r'["\']?aws[_-]?secret["\']?\s*[:=]\s*["\'][^"\']+',' 'AWS Secret'),
+        (r'["\']?api[_-]?key["\']?\s*[:=]\s*["\'][^"\']+', 'API Key'),
+        (r'["\']?secret[_-]?key["\']?\s*[:=]\s*["\'][^"\']+', 'Secret Key'),
+        (r'["\']?password["\']?\s*[:=]\s*["\'][^"\']+', 'Password'),
+        (r'["\']?token["\']?\s*[:=]\s*["\'][^"\']+', 'Token'),
+        (r'["\']?auth[_-]?token["\']?\s*[:=]\s*["\'][^"\']+', 'Auth Token'),
+        (r'["\']?access[_-]?token["\']?\s*[:=]\s*["\'][^"\']+', 'Access Token'),
+        (r'["\']?client[_-]?secret["\']?\s*[:=]\s*["\'][^"\']+', 'Client Secret'),
+        (r'["\']?private[_-]?key["\']?\s*[:=]\s*["\'][^"\']+', 'Private Key'),
+        (r'Bearer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+', 'JWT Token'),
+        (r'eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+', 'JWT'),
+        (r'AKIA[0-9A-Z]{16}', 'AWS Access Key'),
+        (r'["\']?aws[_-]?secret["\']?\s*[:=]\s*["\'][^"\']+', 'AWS Secret'),
     ]
     
     with open(secrets_file, 'w') as f:
