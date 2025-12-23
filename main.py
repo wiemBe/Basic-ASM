@@ -79,16 +79,23 @@ def check_tool_exists(tool_name):
     if shutil.which(tool_name) is not None:
         return True
     
-    # Check common Go binary locations (in case PATH not updated)
-    go_bin_paths = [
+    # Check common binary locations (in case PATH not updated)
+    common_paths = [
+        # Go binaries
         os.path.expanduser("~/go/bin"),
         "/root/go/bin",
         "/usr/local/go/bin",
         os.path.expanduser("~/.local/bin"),
+        # testssl.sh common locations
+        "/usr/bin",
+        "/usr/local/bin",
+        "/opt/testssl.sh",
+        os.path.expanduser("~/testssl.sh"),
+        os.path.expanduser("~/tools/testssl.sh"),
     ]
     
-    for go_path in go_bin_paths:
-        tool_path = os.path.join(go_path, tool_name)
+    for bin_path in common_paths:
+        tool_path = os.path.join(bin_path, tool_name)
         if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
             return True
     
@@ -102,16 +109,23 @@ def get_tool_path(tool_name):
     if path:
         return path
     
-    # Check common Go binary locations
-    go_bin_paths = [
+    # Check common binary locations
+    common_paths = [
+        # Go binaries
         os.path.expanduser("~/go/bin"),
         "/root/go/bin",
         "/usr/local/go/bin",
         os.path.expanduser("~/.local/bin"),
+        # testssl.sh common locations
+        "/usr/bin",
+        "/usr/local/bin",
+        "/opt/testssl.sh",
+        os.path.expanduser("~/testssl.sh"),
+        os.path.expanduser("~/tools/testssl.sh"),
     ]
     
-    for go_path in go_bin_paths:
-        tool_path = os.path.join(go_path, tool_name)
+    for bin_path in common_paths:
+        tool_path = os.path.join(bin_path, tool_name)
         if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
             return tool_path
     
