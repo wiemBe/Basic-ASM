@@ -12,6 +12,7 @@ import threading
 import queue
 import time
 import re
+import logging
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response, send_from_directory
@@ -47,6 +48,37 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 # Global state for scan management
 active_scans = {}
 scan_logs = {}
+current_scan_id = None  # Track the active scan for log routing
+
+
+class SocketIOLogHandler(logging.Handler):
+    """Custom logging handler that emits logs to Socket.IO."""
+    
+    def emit(self, record):
+        global current_scan_id
+        if current_scan_id and current_scan_id in active_scans:
+            try:
+                log_entry = {
+                    'time': datetime.now().strftime("%H:%M:%S"),
+                    'level': record.levelname.lower(),
+                    'message': self.format(record)
+                }
+                # Add to scan's log list
+                active_scans[current_scan_id].logs.append(log_entry)
+                # Emit to frontend
+                socketio.emit('scan_log', {
+                    'scan_id': current_scan_id,
+                    'log': log_entry
+                })
+            except Exception:
+                pass  # Don't break on logging errors
+
+
+# Add the Socket.IO handler to the main.py logger
+socket_handler = SocketIOLogHandler()
+socket_handler.setFormatter(logging.Formatter('%(message)s'))
+socket_handler.setLevel(logging.INFO)
+logger.addHandler(socket_handler)
 
 class ScanManager:
     """Manages ASM scan execution and progress tracking."""
@@ -88,6 +120,9 @@ class ScanManager:
     
     def run_scan(self):
         """Execute the full ASM scan pipeline."""
+        global current_scan_id
+        current_scan_id = self.scan_id  # Set active scan for log routing
+        
         self.start_time = datetime.now()
         self.status = "running"
         
@@ -266,6 +301,10 @@ class ScanManager:
             self.log(f"Scan error: {str(e)}", "error")
             self.update_progress("Failed", self.progress, "failed")
             self.end_time = datetime.now()
+        finally:
+            # Clear active scan ID when done
+            global current_scan_id
+            current_scan_id = None
 
 
 def get_available_tools():
