@@ -21,6 +21,7 @@ from flask_socketio import SocketIO, emit
 # Import the core ASM functions from main.py
 from main import (
     validate_domain,
+    validate_target,
     check_tool_exists,
     run_command,
     count_lines_safely,
@@ -38,7 +39,8 @@ from main import (
     module_api_discovery,
     generate_report,
     logger,
-    COMMAND_TIMEOUT
+    COMMAND_TIMEOUT,
+    OUTPUT_DIR
 )
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
@@ -125,14 +127,15 @@ class ScanManager:
         
         self.start_time = datetime.now()
         self.status = "running"
+        is_ip_target = self.options.get('is_ip', False)
         
         try:
             # Validate target
-            self.log(f"Starting scan for: {self.target}")
+            self.log(f"Starting scan for: {self.target} ({'IP' if is_ip_target else 'Domain'})")
             self.update_progress("Validation", 5)
             
             try:
-                validated_target = validate_domain(self.target)
+                validated_target, is_ip = validate_target(self.target, is_ip=is_ip_target)
             except ValueError as e:
                 self.log(f"Invalid target: {e}", "error")
                 self.update_progress("Failed", 0, "failed")
@@ -141,32 +144,51 @@ class ScanManager:
             # Set rate limit from options
             rate_limiter.set_delay(self.options.get('rate_limit', 1.0))
             
-            # Phase 1: Discovery
-            self.update_progress("Subdomain Discovery", 10)
-            self.log("Phase 1: Running subdomain discovery...")
-            self.output_dir = module_discovery(validated_target)
-            
-            if not self.output_dir:
-                self.log("Discovery failed!", "error")
-                self.update_progress("Failed", 10, "failed")
-                return
-            
-            self.log(f"Output directory: {self.output_dir}")
-            self.results['output_dir'] = str(self.output_dir)
-            
-            # Count subdomains
-            subs_file = self.output_dir / "subdomains.txt"
-            if subs_file.exists():
-                count = count_lines_safely(subs_file)
-                self.results['subdomains'] = count
-                self.log(f"Found {count} subdomains")
-            
-            # Count live hosts
-            alive_file = self.output_dir / "live_hosts.txt"
-            if alive_file.exists():
-                count = count_lines_safely(alive_file)
-                self.results['live_hosts'] = count
-                self.log(f"Found {count} live hosts")
+            # Phase 1: Discovery (skip subdomain enum for IPs)
+            if is_ip:
+                self.update_progress("IP Setup", 10)
+                self.log("Phase 1: Setting up IP target (skipping subdomain discovery)...")
+                # Create output directory for IP
+                self.output_dir = Path(OUTPUT_DIR) / validated_target.replace(':', '_')
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Create live_hosts.txt with the IP
+                alive_file = self.output_dir / "live_hosts.txt"
+                with open(alive_file, 'w') as f:
+                    f.write(f"http://{validated_target}\n")
+                    f.write(f"https://{validated_target}\n")
+                
+                self.log(f"Output directory: {self.output_dir}")
+                self.results['output_dir'] = str(self.output_dir)
+                self.results['subdomains'] = 0
+                self.results['live_hosts'] = 1
+                self.log("IP target configured")
+            else:
+                self.update_progress("Subdomain Discovery", 10)
+                self.log("Phase 1: Running subdomain discovery...")
+                self.output_dir = module_discovery(validated_target)
+                
+                if not self.output_dir:
+                    self.log("Discovery failed!", "error")
+                    self.update_progress("Failed", 10, "failed")
+                    return
+                
+                self.log(f"Output directory: {self.output_dir}")
+                self.results['output_dir'] = str(self.output_dir)
+                
+                # Count subdomains
+                subs_file = self.output_dir / "subdomains.txt"
+                if subs_file.exists():
+                    count = count_lines_safely(subs_file)
+                    self.results['subdomains'] = count
+                    self.log(f"Found {count} subdomains")
+                
+                # Count live hosts
+                alive_file = self.output_dir / "live_hosts.txt"
+                if alive_file.exists():
+                    count = count_lines_safely(alive_file)
+                    self.results['live_hosts'] = count
+                    self.log(f"Found {count} live hosts")
             
             # Check if discovery only
             if self.options.get('discovery_only'):
@@ -227,8 +249,10 @@ class ScanManager:
             else:
                 self.log("Skipping screenshot capture")
             
-            # Phase 6: DNS Enumeration
-            if not self.options.get('skip_dns'):
+            # Phase 6: DNS Enumeration (skip for IPs)
+            if is_ip:
+                self.log("Skipping DNS enumeration (not applicable for IP targets)")
+            elif not self.options.get('skip_dns'):
                 self.update_progress("DNS Enumeration", 60)
                 self.log("Phase 6: Running DNS enumeration...")
                 module_dns_enum(self.output_dir, validated_target)
@@ -271,11 +295,15 @@ class ScanManager:
             # Phase 10: API Discovery
             if not self.options.get('skip_api'):
                 self.update_progress("API Discovery", 90)
-                self.log("Phase 10: Running API endpoint discovery...")
+                if is_ip:
+                    self.log("Phase 10: Running API endpoint discovery (katana only, no historical data for IPs)...")
+                else:
+                    self.log("Phase 10: Running API endpoint discovery...")
                 module_api_discovery(
                     self.output_dir,
                     depth=self.options.get('crawl_depth', 3),
-                    crawl_duration=self.options.get('crawl_duration', 300)
+                    crawl_duration=self.options.get('crawl_duration', 300),
+                    skip_historical=is_ip  # Skip gau/waybackurls for IPs
                 )
                 api_file = self.output_dir / "api_endpoints.txt"
                 if api_file.exists():
@@ -413,6 +441,7 @@ def start_scan():
         'skip_ssl': data.get('skip_ssl', False),
         'skip_waf': data.get('skip_waf', False),
         'skip_api': data.get('skip_api', False),
+        'is_ip': data.get('is_ip', False),  # IP target mode
         'top_ports': int(data.get('top_ports', 1000)),
         'vuln_severity': data.get('vuln_severity', 'medium,high,critical'),
         'rate_limit': float(data.get('rate_limit', 1.0)),

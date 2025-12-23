@@ -76,14 +76,33 @@
                             New Scan
                         </h2>
                         
+                        <!-- Target Type Toggle -->
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Target Type</span>
+                            </label>
+                            <div class="btn-group w-full">
+                                <button type="button" id="btnDomain" class="btn btn-sm btn-primary flex-1" onclick="setTargetType('domain')">
+                                    <i class="fas fa-globe mr-1"></i>Domain
+                                </button>
+                                <button type="button" id="btnIP" class="btn btn-sm btn-outline flex-1" onclick="setTargetType('ip')">
+                                    <i class="fas fa-network-wired mr-1"></i>IP Address
+                                </button>
+                            </div>
+                        </div>
+                        
                         <!-- Target Input -->
                         <div class="form-control">
                             <label class="label">
-                                <span class="label-text">Target Domain</span>
+                                <span class="label-text" id="targetLabel">Target Domain</span>
                             </label>
                             <input type="text" id="target" placeholder="example.com" 
                                    class="input input-bordered input-primary w-full" />
+                            <label class="label">
+                                <span class="label-text-alt text-base-content/50" id="targetHint">Enter a domain name to scan</span>
+                            </label>
                         </div>
+                        <input type="hidden" id="is_ip" value="false" />
 
                         <!-- Quick Options -->
                         <div class="divider text-xs opacity-50">Scan Modules</div>
@@ -389,6 +408,33 @@
             checkTools();
         });
 
+        // Set target type (domain or IP)
+        function setTargetType(type) {
+            const btnDomain = document.getElementById('btnDomain');
+            const btnIP = document.getElementById('btnIP');
+            const targetInput = document.getElementById('target');
+            const targetLabel = document.getElementById('targetLabel');
+            const targetHint = document.getElementById('targetHint');
+            const isIpInput = document.getElementById('is_ip');
+            
+            if (type === 'ip') {
+                btnDomain.className = 'btn btn-sm btn-outline flex-1';
+                btnIP.className = 'btn btn-sm btn-primary flex-1';
+                targetInput.placeholder = '192.168.1.1 or 10.0.0.1';
+                targetLabel.textContent = 'Target IP Address';
+                targetHint.textContent = 'Subdomain discovery & DNS enumeration will be skipped';
+                isIpInput.value = 'true';
+            } else {
+                btnDomain.className = 'btn btn-sm btn-primary flex-1';
+                btnIP.className = 'btn btn-sm btn-outline flex-1';
+                targetInput.placeholder = 'example.com';
+                targetLabel.textContent = 'Target Domain';
+                targetHint.textContent = 'Enter a domain name to scan';
+                isIpInput.value = 'false';
+            }
+            targetInput.value = '';
+        }
+
         // Check available tools
         async function checkTools() {
             try {
@@ -453,12 +499,15 @@
         async function startScan() {
             const target = document.getElementById('target').value.trim();
             if (!target) {
-                alert('Please enter a target domain');
+                alert('Please enter a target');
                 return;
             }
 
+            const isIp = document.getElementById('is_ip').value === 'true';
+            
             const options = {
                 target: target,
+                is_ip: isIp,
                 discovery_only: document.getElementById('discovery_only').checked,
                 skip_ports: document.getElementById('skip_ports').checked,
                 skip_tech: document.getElementById('skip_tech').checked,

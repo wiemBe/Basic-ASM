@@ -51,27 +51,59 @@ class RateLimiter:
 # Global rate limiter instance
 rate_limiter = RateLimiter()
 
+def is_valid_ip(ip):
+    """
+    Check if string is a valid IPv4 or IPv6 address.
+    """
+    # IPv4 pattern
+    ipv4_pattern = re.compile(
+        r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
+        r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+    )
+    # IPv6 pattern (simplified)
+    ipv6_pattern = re.compile(
+        r'^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|'
+        r'^([0-9a-fA-F]{1,4}:){1,7}:$|'
+        r'^::([0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}$'
+    )
+    return bool(ipv4_pattern.match(ip) or ipv6_pattern.match(ip))
+
+
+def validate_target(target, is_ip=False):
+    """
+    Validate target (domain or IP) format to prevent command injection.
+    Returns tuple: (validated_target, is_ip_address)
+    """
+    # Additional security checks
+    dangerous_chars = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r', ' ']
+    if any(char in target for char in dangerous_chars):
+        raise ValueError(f"Target contains forbidden characters: {target}")
+    
+    if is_ip:
+        # Validate IP address
+        if not is_valid_ip(target):
+            raise ValueError(f"Invalid IP address format: {target}")
+        return target, True
+    else:
+        # Validate domain
+        domain_pattern = re.compile(
+            r'^(?!-)[A-Za-z0-9-]{1,63}(?<!-)'  # Labels (no leading/trailing hyphens)
+            r'(\.[A-Za-z0-9-]{1,63})*'          # Additional labels
+            r'\.[A-Za-z]{2,}$'                   # TLD
+        )
+        if not domain_pattern.match(target):
+            raise ValueError(f"Invalid domain format: {target}")
+        return target, False
+
+
 def validate_domain(domain):
     """
     Validate domain format to prevent command injection.
     Only allows valid domain characters: alphanumeric, hyphens, and dots.
+    Legacy function - use validate_target() for new code.
     """
-    # Strict regex for valid domain names
-    domain_pattern = re.compile(
-        r'^(?!-)[A-Za-z0-9-]{1,63}(?<!-)'  # Labels (no leading/trailing hyphens)
-        r'(\.[A-Za-z0-9-]{1,63})*'          # Additional labels
-        r'\.[A-Za-z]{2,}$'                   # TLD
-    )
-    
-    if not domain_pattern.match(domain):
-        raise ValueError(f"Invalid domain format: {domain}")
-    
-    # Additional security checks
-    dangerous_chars = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r']
-    if any(char in domain for char in dangerous_chars):
-        raise ValueError(f"Domain contains forbidden characters: {domain}")
-    
-    return domain
+    target, _ = validate_target(domain, is_ip=False)
+    return target
 
 def check_tool_exists(tool_name):
     """Verify required tools are installed before running."""
@@ -860,13 +892,16 @@ def module_waf_detect(output_dir):
     return True
 
 
-def module_api_discovery(output_dir, depth=3, crawl_duration=300):
+def module_api_discovery(output_dir, depth=3, crawl_duration=300, skip_historical=False):
     """
     Phase 10: API Endpoint Discovery
     Discovers API endpoints using multiple sources:
     - katana: Active crawling
-    - gau: GetAllUrls from various sources
-    - waybackurls: Historical URLs from Wayback Machine
+    - gau: GetAllUrls from various sources (skipped for IPs)
+    - waybackurls: Historical URLs from Wayback Machine (skipped for IPs)
+    
+    Args:
+        skip_historical: If True, skip gau and waybackurls (for IP targets)
     """
     logger.info("Starting Phase 10: API Endpoint Discovery")
     
@@ -942,8 +977,10 @@ def module_api_discovery(output_dir, depth=3, crawl_duration=300):
     else:
         logger.warning("katana not found. Install: go install github.com/projectdiscovery/katana/cmd/katana@latest")
     
-    # Tool 2: GAU (GetAllUrls)
-    if check_tool_exists('gau'):
+    # Tool 2: GAU (GetAllUrls) - Skip for IP targets
+    if skip_historical:
+        logger.info("Skipping GAU (historical URLs not available for IP targets)")
+    elif check_tool_exists('gau'):
         logger.info("Running GAU (GetAllUrls)...")
         rate_limiter.wait()
         
@@ -966,8 +1003,10 @@ def module_api_discovery(output_dir, depth=3, crawl_duration=300):
     else:
         logger.warning("gau not found. Install: go install github.com/lc/gau/v2/cmd/gau@latest")
     
-    # Tool 3: Waybackurls
-    if check_tool_exists('waybackurls'):
+    # Tool 3: Waybackurls - Skip for IP targets
+    if skip_historical:
+        logger.info("Skipping Waybackurls (historical URLs not available for IP targets)")
+    elif check_tool_exists('waybackurls'):
         logger.info("Running Waybackurls...")
         rate_limiter.wait()
         
