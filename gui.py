@@ -543,3 +543,5 @@ if __name__ == '__main__':
     """)
     
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+
+go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest github.com/projectdiscovery/httpx/cmd/httpx@latest github.com/projectdiscovery/dnsx/cmd/dnsx@latest github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest github.com/projectdiscovery/katana/cmd/katana@latest github.com/ffuf/ffuf/v2@latest github.com/sensepost/gowitness@latest github.com/lc/gau/v2/cmd/gau@latest github.com/tomnomnom/waybackurls@latest
