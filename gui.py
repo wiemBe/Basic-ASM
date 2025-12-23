@@ -474,21 +474,17 @@ def list_scans():
 @app.route('/api/previous-scans')
 def previous_scans():
     """List previous scan results from disk."""
-    output_dir = Path("asm_output")
+    output_dir = Path("scanned_results")
     scans = []
     
     if output_dir.exists():
-        for scan_dir in sorted(output_dir.iterdir(), reverse=True):
+        for scan_dir in sorted(output_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
             if scan_dir.is_dir():
                 report_file = scan_dir / "report.md"
                 if report_file.exists():
-                    # Extract domain from folder name
-                    parts = scan_dir.name.rsplit('_', 2)
-                    domain = parts[0] if len(parts) >= 3 else scan_dir.name
-                    
                     scans.append({
                         'name': scan_dir.name,
-                        'domain': domain,
+                        'domain': scan_dir.name,
                         'path': str(scan_dir),
                         'date': datetime.fromtimestamp(scan_dir.stat().st_mtime).isoformat()
                     })

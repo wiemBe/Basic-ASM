@@ -12,19 +12,17 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure logging for audit trail
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('asm_audit.log'),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Console handler (always active)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(console_handler)
 
 # Configuration constants
 COMMAND_TIMEOUT = 300  # 5 minutes max per command
-OUTPUT_DIR = "asm_output"
+OUTPUT_DIR = "scanned_results"
 RATE_LIMIT_DELAY = 1.0  # Seconds between requests (adjustable)
 
 
@@ -137,10 +135,16 @@ def count_lines_safely(filepath):
 
 def setup_output_directory(target_domain):
     """Create a dedicated output directory for the scan results."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_domain = re.sub(r'[^\w\-.]', '_', target_domain)
-    output_path = Path(OUTPUT_DIR) / f"{safe_domain}_{timestamp}"
+    output_path = Path(OUTPUT_DIR) / safe_domain
     output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Setup file logging in the output directory
+    log_file = output_path / "scan.log"
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+    
     return output_path
 
 def module_discovery(target_domain):

@@ -1,0 +1,29 @@
+# Scan Results - ignore all output
+scanned_results/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs (kept in scanned_results)
+*.log
+
+# Temp files
+*.tmp
+*.temp
