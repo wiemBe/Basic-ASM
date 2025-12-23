@@ -75,10 +75,48 @@ def validate_domain(domain):
 
 def check_tool_exists(tool_name):
     """Verify required tools are installed before running."""
-    if shutil.which(tool_name) is None:
-        logger.error(f"Required tool '{tool_name}' not found in PATH")
-        return False
-    return True
+    # First check if tool is in PATH
+    if shutil.which(tool_name) is not None:
+        return True
+    
+    # Check common Go binary locations (in case PATH not updated)
+    go_bin_paths = [
+        os.path.expanduser("~/go/bin"),
+        "/root/go/bin",
+        "/usr/local/go/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    
+    for go_path in go_bin_paths:
+        tool_path = os.path.join(go_path, tool_name)
+        if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
+            return True
+    
+    logger.error(f"Required tool '{tool_name}' not found in PATH")
+    return False
+
+def get_tool_path(tool_name):
+    """Get the full path to a tool, checking common locations."""
+    # First check if tool is in PATH
+    path = shutil.which(tool_name)
+    if path:
+        return path
+    
+    # Check common Go binary locations
+    go_bin_paths = [
+        os.path.expanduser("~/go/bin"),
+        "/root/go/bin",
+        "/usr/local/go/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    
+    for go_path in go_bin_paths:
+        tool_path = os.path.join(go_path, tool_name)
+        if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
+            return tool_path
+    
+    # Return original name as fallback (will fail if not in PATH)
+    return tool_name
 
 def run_command(command_args, input_file=None, output_file=None, timeout=COMMAND_TIMEOUT):
     """
@@ -91,10 +129,15 @@ def run_command(command_args, input_file=None, output_file=None, timeout=COMMAND
             with open(input_file, 'r') as f:
                 stdin_data = f.read()
         
-        logger.info(f"Executing: {' '.join(command_args)}")
+        # Resolve the tool path for the first argument (the command)
+        resolved_args = command_args.copy()
+        if resolved_args:
+            resolved_args[0] = get_tool_path(resolved_args[0])
+        
+        logger.info(f"Executing: {' '.join(resolved_args)}")
         
         result = subprocess.run(
-            command_args,
+            resolved_args,
             input=stdin_data,
             text=True,
             capture_output=True,
