@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASM Tool - Attack Surface Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.19/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        }
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+        .pulse-dot {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .log-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .log-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .log-container::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            border-radius: 3px;
+        }
+        .tool-badge {
+            transition: all 0.3s ease;
+        }
+        .results-table {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen">
+    <!-- Navbar -->
+    <nav class="navbar bg-base-300/50 backdrop-blur-lg sticky top-0 z-50 border-b border-base-content/10">
+        <div class="flex-1">
+            <a class="btn btn-ghost text-xl">
+                <i class="fas fa-shield-halved text-primary mr-2"></i>
+                ASM Tool
+            </a>
+        </div>
+        <div class="flex-none gap-2">
+            <button class="btn btn-ghost btn-circle" onclick="checkTools()">
+                <i class="fas fa-wrench"></i>
+            </button>
+            <button class="btn btn-ghost btn-circle" onclick="showHistory()">
+                <i class="fas fa-history"></i>
+            </button>
+        </div>
+    </nav>
+
+    <div class="container mx-auto px-4 py-8">
+        <!-- Main Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Left Column: Scan Configuration -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- New Scan Card -->
+                <div class="card bg-base-200/50 backdrop-blur shadow-xl card-hover transition-all duration-300">
+                    <div class="card-body">
+                        <h2 class="card-title text-primary">
+                            <i class="fas fa-crosshairs mr-2"></i>
+                            New Scan
+                        </h2>
+                        
+                        <!-- Target Input -->
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text">Target Domain</span>
+                            </label>
+                            <input type="text" id="target" placeholder="example.com" 
+                                   class="input input-bordered input-primary w-full" />
+                        </div>
+
+                        <!-- Quick Options -->
+                        <div class="divider text-xs opacity-50">Scan Modules</div>
+                        
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_ports" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip Ports</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_tech" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip Tech</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_vuln" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip Vulns</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_screenshots" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip Screenshots</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_dns" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip DNS</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_dirs" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip Dirs</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_ssl" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip SSL</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_waf" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip WAF</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="skip_api" class="checkbox checkbox-xs checkbox-primary" />
+                                <span class="label-text">Skip API</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" id="discovery_only" class="checkbox checkbox-xs checkbox-warning" />
+                                <span class="label-text">Discovery Only</span>
+                            </label>
+                        </div>
+
+                        <!-- Advanced Options Collapse -->
+                        <div class="collapse collapse-arrow bg-base-300/50 mt-4">
+                            <input type="checkbox" />
+                            <div class="collapse-title text-sm font-medium">
+                                <i class="fas fa-cog mr-2"></i>Advanced Options
+                            </div>
+                            <div class="collapse-content space-y-3">
+                                <div class="form-control">
+                                    <label class="label py-1">
+                                        <span class="label-text text-xs">Top Ports</span>
+                                    </label>
+                                    <input type="number" id="top_ports" value="1000" 
+                                           class="input input-bordered input-sm w-full" />
+                                </div>
+                                <div class="form-control">
+                                    <label class="label py-1">
+                                        <span class="label-text text-xs">Rate Limit (seconds)</span>
+                                    </label>
+                                    <input type="number" id="rate_limit" value="1.0" step="0.5" 
+                                           class="input input-bordered input-sm w-full" />
+                                </div>
+                                <div class="form-control">
+                                    <label class="label py-1">
+                                        <span class="label-text text-xs">Crawl Depth</span>
+                                    </label>
+                                    <input type="number" id="crawl_depth" value="3" 
+                                           class="input input-bordered input-sm w-full" />
+                                </div>
+                                <div class="form-control">
+                                    <label class="label py-1">
+                                        <span class="label-text text-xs">Vuln Severity</span>
+                                    </label>
+                                    <select id="vuln_severity" class="select select-bordered select-sm w-full">
+                                        <option value="low,medium,high,critical">All</option>
+                                        <option value="medium,high,critical" selected>Medium+</option>
+                                        <option value="high,critical">High+</option>
+                                        <option value="critical">Critical Only</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Start Button -->
+                        <div class="card-actions justify-end mt-4">
+                            <button id="startScanBtn" class="btn btn-primary btn-block" onclick="startScan()">
+                                <i class="fas fa-play mr-2"></i>
+                                Start Scan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tools Status Card -->
+                <div class="card bg-base-200/50 backdrop-blur shadow-xl">
+                    <div class="card-body">
+                        <h2 class="card-title text-sm">
+                            <i class="fas fa-toolbox mr-2 text-secondary"></i>
+                            Tools Status
+                        </h2>
+                        <div id="toolsStatus" class="flex flex-wrap gap-2">
+                            <span class="badge badge-ghost">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Results & Logs -->
+            <div class="lg:col-span-2 space-y-6">
+                
+                <!-- Progress Card -->
+                <div id="progressCard" class="card bg-base-200/50 backdrop-blur shadow-xl hidden">
+                    <div class="card-body">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="card-title">
+                                <i class="fas fa-spinner fa-spin mr-2 text-info"></i>
+                                <span id="scanTarget">Scanning...</span>
+                            </h2>
+                            <div class="flex gap-2">
+                                <span id="scanStatus" class="badge badge-info">Running</span>
+                                <button class="btn btn-sm btn-error btn-outline" onclick="stopScan()">
+                                    <i class="fas fa-stop"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Progress Bar -->
+                        <div class="w-full">
+                            <div class="flex justify-between text-sm mb-1">
+                                <span id="currentPhase">Initializing...</span>
+                                <span id="progressPercent">0%</span>
+                            </div>
+                            <progress id="progressBar" class="progress progress-primary w-full" value="0" max="100"></progress>
+                        </div>
+
+                        <!-- Quick Stats -->
+                        <div class="stats stats-horizontal shadow bg-base-300/50 mt-4">
+                            <div class="stat place-items-center py-2">
+                                <div class="stat-title text-xs">Subdomains</div>
+                                <div id="statSubdomains" class="stat-value text-lg text-primary">-</div>
+                            </div>
+                            <div class="stat place-items-center py-2">
+                                <div class="stat-title text-xs">Live Hosts</div>
+                                <div id="statLiveHosts" class="stat-value text-lg text-success">-</div>
+                            </div>
+                            <div class="stat place-items-center py-2">
+                                <div class="stat-title text-xs">Vulnerabilities</div>
+                                <div id="statVulns" class="stat-value text-lg text-error">-</div>
+                            </div>
+                            <div class="stat place-items-center py-2">
+                                <div class="stat-title text-xs">API Endpoints</div>
+                                <div id="statAPI" class="stat-value text-lg text-info">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logs Card -->
+                <div id="logsCard" class="card bg-base-200/50 backdrop-blur shadow-xl hidden">
+                    <div class="card-body">
+                        <h2 class="card-title text-sm">
+                            <i class="fas fa-terminal mr-2 text-success"></i>
+                            Live Logs
+                        </h2>
+                        <div id="logsContainer" class="log-container bg-base-300 rounded-lg p-4 font-mono text-xs">
+                            <p class="text-base-content/50">Waiting for scan to start...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results Tabs -->
+                <div id="resultsCard" class="card bg-base-200/50 backdrop-blur shadow-xl hidden">
+                    <div class="card-body">
+                        <div class="tabs tabs-boxed bg-base-300/50 mb-4">
+                            <a class="tab tab-active" onclick="showTab('subdomains', this)">
+                                <i class="fas fa-sitemap mr-1"></i> Subdomains
+                            </a>
+                            <a class="tab" onclick="showTab('hosts', this)">
+                                <i class="fas fa-server mr-1"></i> Live Hosts
+                            </a>
+                            <a class="tab" onclick="showTab('vulns', this)">
+                                <i class="fas fa-bug mr-1"></i> Vulnerabilities
+                            </a>
+                            <a class="tab" onclick="showTab('api', this)">
+                                <i class="fas fa-plug mr-1"></i> API Endpoints
+                            </a>
+                            <a class="tab" onclick="showTab('report', this)">
+                                <i class="fas fa-file-alt mr-1"></i> Report
+                            </a>
+                        </div>
+
+                        <!-- Tab Contents -->
+                        <div id="tab-subdomains" class="results-table">
+                            <table class="table table-zebra table-sm w-full">
+                                <thead><tr><th>Subdomain</th></tr></thead>
+                                <tbody id="subdomainsList"></tbody>
+                            </table>
+                        </div>
+                        <div id="tab-hosts" class="results-table hidden">
+                            <table class="table table-zebra table-sm w-full">
+                                <thead><tr><th>Host</th><th>Status</th><th>Title</th></tr></thead>
+                                <tbody id="hostsList"></tbody>
+                            </table>
+                        </div>
+                        <div id="tab-vulns" class="results-table hidden">
+                            <table class="table table-zebra table-sm w-full">
+                                <thead><tr><th>Vulnerability</th></tr></thead>
+                                <tbody id="vulnsList"></tbody>
+                            </table>
+                        </div>
+                        <div id="tab-api" class="results-table hidden">
+                            <table class="table table-zebra table-sm w-full">
+                                <thead><tr><th>API Endpoint</th></tr></thead>
+                                <tbody id="apiList"></tbody>
+                            </table>
+                        </div>
+                        <div id="tab-report" class="hidden">
+                            <div id="reportContent" class="prose prose-sm max-w-none bg-base-300 rounded-lg p-4 overflow-auto max-h-96"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                <div id="emptyState" class="card bg-base-200/50 backdrop-blur shadow-xl">
+                    <div class="card-body items-center text-center py-16">
+                        <i class="fas fa-radar fa-4x text-primary/30 mb-4"></i>
+                        <h2 class="card-title">Ready to Scan</h2>
+                        <p class="text-base-content/50">Enter a target domain and start your attack surface discovery.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tools Modal -->
+    <dialog id="toolsModal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg mb-4">
+                <i class="fas fa-toolbox mr-2 text-primary"></i>
+                Required Tools
+            </h3>
+            <div id="toolsDetailList" class="space-y-2"></div>
+            <div class="modal-action">
+                <form method="dialog">
+                    <button class="btn">Close</button>
+                </form>
+            </div>
+        </div>
+    </dialog>
+
+    <!-- History Modal -->
+    <dialog id="historyModal" class="modal">
+        <div class="modal-box max-w-2xl">
+            <h3 class="font-bold text-lg mb-4">
+                <i class="fas fa-history mr-2 text-primary"></i>
+                Previous Scans
+            </h3>
+            <div id="historyList" class="space-y-2 max-h-96 overflow-y-auto"></div>
+            <div class="modal-action">
+                <form method="dialog">
+                    <button class="btn">Close</button>
+                </form>
+            </div>
+        </div>
+    </dialog>
+
+    <script>
+        // Global state
+        let currentScanId = null;
+        let socket = null;
+        let toolsData = {};
+
+        // Initialize Socket.IO
+        function initSocket() {
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('Connected to server');
+            });
+            
+            socket.on('scan_progress', (data) => {
+                if (data.scan_id === currentScanId) {
+                    updateProgress(data);
+                }
+            });
+            
+            socket.on('scan_log', (data) => {
+                if (data.scan_id === currentScanId) {
+                    addLog(data.log);
+                }
+            });
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            initSocket();
+            checkTools();
+        });
+
+        // Check available tools
+        async function checkTools() {
+            try {
+                const response = await fetch('/api/tools');
+                toolsData = await response.json();
+                
+                const container = document.getElementById('toolsStatus');
+                container.innerHTML = '';
+                
+                for (const [tool, available] of Object.entries(toolsData)) {
+                    const badge = document.createElement('span');
+                    badge.className = `badge badge-sm tool-badge ${available ? 'badge-success' : 'badge-error'}`;
+                    badge.innerHTML = `<i class="fas fa-${available ? 'check' : 'times'} mr-1"></i>${tool}`;
+                    container.appendChild(badge);
+                }
+            } catch (error) {
+                console.error('Failed to check tools:', error);
+            }
+        }
+
+        // Show tools modal with installation instructions
+        function showToolsModal() {
+            const list = document.getElementById('toolsDetailList');
+            list.innerHTML = '';
+            
+            const installCommands = {
+                'subfinder': 'go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest',
+                'httpx-toolkit': 'apt install httpx-toolkit',
+                'nmap': 'apt install nmap',
+                'whatweb': 'apt install whatweb',
+                'nuclei': 'go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest',
+                'gowitness': 'go install github.com/sensepost/gowitness@latest',
+                'dnsx': 'go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest',
+                'ffuf': 'go install github.com/ffuf/ffuf/v2@latest',
+                'testssl.sh': 'apt install testssl.sh',
+                'wafw00f': 'pip install wafw00f',
+                'katana': 'go install github.com/projectdiscovery/katana/cmd/katana@latest',
+                'gau': 'go install github.com/lc/gau/v2/cmd/gau@latest',
+                'waybackurls': 'go install github.com/tomnomnom/waybackurls@latest'
+            };
+            
+            for (const [tool, available] of Object.entries(toolsData)) {
+                const div = document.createElement('div');
+                div.className = `alert ${available ? 'alert-success' : 'alert-warning'} py-2`;
+                div.innerHTML = `
+                    <div class="flex flex-col items-start w-full">
+                        <div class="flex items-center gap-2">
+                            <i class="fas fa-${available ? 'check-circle' : 'exclamation-triangle'}"></i>
+                            <span class="font-semibold">${tool}</span>
+                            <span class="badge badge-sm">${available ? 'Installed' : 'Missing'}</span>
+                        </div>
+                        ${!available ? `<code class="text-xs mt-1 bg-base-300 px-2 py-1 rounded">${installCommands[tool] || 'Check documentation'}</code>` : ''}
+                    </div>
+                `;
+                list.appendChild(div);
+            }
+            
+            document.getElementById('toolsModal').showModal();
+        }
+
+        // Start scan
+        async function startScan() {
+            const target = document.getElementById('target').value.trim();
+            if (!target) {
+                alert('Please enter a target domain');
+                return;
+            }
+
+            const options = {
+                target: target,
+                discovery_only: document.getElementById('discovery_only').checked,
+                skip_ports: document.getElementById('skip_ports').checked,
+                skip_tech: document.getElementById('skip_tech').checked,
+                skip_vuln: document.getElementById('skip_vuln').checked,
+                skip_screenshots: document.getElementById('skip_screenshots').checked,
+                skip_dns: document.getElementById('skip_dns').checked,
+                skip_dirs: document.getElementById('skip_dirs').checked,
+                skip_ssl: document.getElementById('skip_ssl').checked,
+                skip_waf: document.getElementById('skip_waf').checked,
+                skip_api: document.getElementById('skip_api').checked,
+                top_ports: parseInt(document.getElementById('top_ports').value),
+                rate_limit: parseFloat(document.getElementById('rate_limit').value),
+                crawl_depth: parseInt(document.getElementById('crawl_depth').value),
+                vuln_severity: document.getElementById('vuln_severity').value
+            };
+
+            try {
+                const response = await fetch('/api/scan/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(options)
+                });
+                
+                const data = await response.json();
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                
+                currentScanId = data.scan_id;
+                
+                // Show progress UI
+                document.getElementById('emptyState').classList.add('hidden');
+                document.getElementById('progressCard').classList.remove('hidden');
+                document.getElementById('logsCard').classList.remove('hidden');
+                document.getElementById('resultsCard').classList.add('hidden');
+                
+                document.getElementById('scanTarget').textContent = target;
+                document.getElementById('logsContainer').innerHTML = '';
+                
+                // Subscribe to updates
+                socket.emit('subscribe_scan', {scan_id: currentScanId});
+                
+                // Disable start button
+                document.getElementById('startScanBtn').disabled = true;
+                document.getElementById('startScanBtn').innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Scanning...';
+                
+                // Start polling for status
+                pollScanStatus();
+                
+            } catch (error) {
+                console.error('Failed to start scan:', error);
+                alert('Failed to start scan');
+            }
+        }
+
+        // Poll scan status
+        async function pollScanStatus() {
+            if (!currentScanId) return;
+            
+            try {
+                const response = await fetch(`/api/scan/${currentScanId}/status`);
+                const data = await response.json();
+                
+                updateProgress(data);
+                updateStats(data.results);
+                
+                if (data.status === 'running') {
+                    setTimeout(pollScanStatus, 2000);
+                } else if (data.status === 'completed' || data.status === 'failed') {
+                    onScanComplete(data);
+                }
+            } catch (error) {
+                console.error('Failed to poll status:', error);
+                setTimeout(pollScanStatus, 5000);
+            }
+        }
+
+        // Update progress UI
+        function updateProgress(data) {
+            document.getElementById('currentPhase').textContent = data.phase || 'Processing...';
+            document.getElementById('progressPercent').textContent = `${data.progress}%`;
+            document.getElementById('progressBar').value = data.progress;
+            
+            const statusBadge = document.getElementById('scanStatus');
+            statusBadge.textContent = data.status;
+            statusBadge.className = `badge badge-${data.status === 'running' ? 'info' : data.status === 'completed' ? 'success' : 'error'}`;
+        }
+
+        // Update stats
+        function updateStats(results) {
+            if (!results) return;
+            document.getElementById('statSubdomains').textContent = results.subdomains || '-';
+            document.getElementById('statLiveHosts').textContent = results.live_hosts || '-';
+            document.getElementById('statVulns').textContent = results.vulnerabilities || '-';
+            document.getElementById('statAPI').textContent = results.api_endpoints || '-';
+        }
+
+        // Add log entry
+        function addLog(log) {
+            const container = document.getElementById('logsContainer');
+            const p = document.createElement('p');
+            p.className = `${log.level === 'error' ? 'text-error' : log.level === 'warning' ? 'text-warning' : 'text-base-content'}`;
+            p.innerHTML = `<span class="text-primary">[${log.time}]</span> ${log.message}`;
+            container.appendChild(p);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // On scan complete
+        async function onScanComplete(data) {
+            document.getElementById('startScanBtn').disabled = false;
+            document.getElementById('startScanBtn').innerHTML = '<i class="fas fa-play mr-2"></i>Start Scan';
+            
+            if (data.status === 'completed') {
+                // Load results
+                try {
+                    const response = await fetch(`/api/scan/${currentScanId}/results`);
+                    const results = await response.json();
+                    displayResults(results);
+                    document.getElementById('resultsCard').classList.remove('hidden');
+                } catch (error) {
+                    console.error('Failed to load results:', error);
+                }
+            }
+        }
+
+        // Display results in tabs
+        function displayResults(results) {
+            // Subdomains
+            const subdomainsList = document.getElementById('subdomainsList');
+            subdomainsList.innerHTML = results.subdomains.map(s => 
+                `<tr><td class="font-mono text-xs">${escapeHtml(s)}</td></tr>`
+            ).join('') || '<tr><td class="text-base-content/50">No subdomains found</td></tr>';
+            
+            // Live hosts
+            const hostsList = document.getElementById('hostsList');
+            hostsList.innerHTML = results.live_hosts.map(h => {
+                const parts = h.split(' ');
+                return `<tr>
+                    <td class="font-mono text-xs">${escapeHtml(parts[0])}</td>
+                    <td>${escapeHtml(parts[1] || '')}</td>
+                    <td>${escapeHtml(parts.slice(2).join(' ') || '')}</td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="3" class="text-base-content/50">No live hosts found</td></tr>';
+            
+            // Vulnerabilities
+            const vulnsList = document.getElementById('vulnsList');
+            vulnsList.innerHTML = results.vulnerabilities.map(v => 
+                `<tr><td class="font-mono text-xs text-error">${escapeHtml(v)}</td></tr>`
+            ).join('') || '<tr><td class="text-success">No vulnerabilities found ✓</td></tr>';
+            
+            // API endpoints
+            const apiList = document.getElementById('apiList');
+            apiList.innerHTML = results.api_endpoints.map(a => 
+                `<tr><td class="font-mono text-xs">${escapeHtml(a)}</td></tr>`
+            ).join('') || '<tr><td class="text-base-content/50">No API endpoints found</td></tr>';
+            
+            // Report
+            if (results.report) {
+                document.getElementById('reportContent').innerHTML = marked.parse(results.report);
+            }
+        }
+
+        // Tab switching
+        function showTab(tabName, element) {
+            // Hide all tabs
+            document.querySelectorAll('[id^="tab-"]').forEach(tab => tab.classList.add('hidden'));
+            // Show selected tab
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+            // Update tab active state
+            document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('tab-active'));
+            element.classList.add('tab-active');
+        }
+
+        // Stop scan
+        async function stopScan() {
+            if (!currentScanId) return;
+            
+            try {
+                await fetch(`/api/scan/${currentScanId}/stop`, {method: 'POST'});
+            } catch (error) {
+                console.error('Failed to stop scan:', error);
+            }
+        }
+
+        // Show history
+        async function showHistory() {
+            try {
+                const response = await fetch('/api/previous-scans');
+                const scans = await response.json();
+                
+                const list = document.getElementById('historyList');
+                list.innerHTML = scans.map(scan => `
+                    <div class="alert bg-base-300 cursor-pointer hover:bg-base-200" onclick="loadScan('${scan.path}')">
+                        <div>
+                            <i class="fas fa-folder mr-2"></i>
+                            <span class="font-semibold">${scan.domain}</span>
+                            <span class="text-xs opacity-50 ml-2">${new Date(scan.date).toLocaleString()}</span>
+                        </div>
+                    </div>
+                `).join('') || '<p class="text-center text-base-content/50">No previous scans found</p>';
+                
+                document.getElementById('historyModal').showModal();
+            } catch (error) {
+                console.error('Failed to load history:', error);
+            }
+        }
+
+        // Load previous scan
+        async function loadScan(path) {
+            try {
+                const response = await fetch(`/api/results/${encodeURIComponent(path)}`);
+                const results = await response.json();
+                
+                displayResults(results);
+                
+                document.getElementById('historyModal').close();
+                document.getElementById('emptyState').classList.add('hidden');
+                document.getElementById('progressCard').classList.add('hidden');
+                document.getElementById('logsCard').classList.add('hidden');
+                document.getElementById('resultsCard').classList.remove('hidden');
+            } catch (error) {
+                console.error('Failed to load scan:', error);
+            }
+        }
+
+        // Utility: Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+    
+    <!-- Marked.js for markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</body>
+</html>

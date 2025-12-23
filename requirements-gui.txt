@@ -1,0 +1,9 @@
+# ASM Tool GUI Requirements
+# Install with: pip install -r requirements-gui.txt
+
+flask>=3.0.0
+flask-socketio>=5.3.0
+python-socketio>=5.10.0
+eventlet>=0.34.0
+gevent>=23.0.0
+gevent-websocket>=0.10.1
