@@ -16,8 +16,9 @@ A comprehensive Attack Surface Management tool for security engineers to discove
   9. WAF Detection (wafw00f)
   10. API Endpoint Discovery (katana, gau, waybackurls)
 
-- **Web GUI** - Modern dashboard with real-time progress
+- **Web GUI** - Modern dashboard with real-time progress and live logs
 - **Security Hardened** - Input validation, no shell injection
+- **Auto Tool Detection** - Finds tools in ~/go/bin even without PATH configured
 
 ## Installation
 
@@ -31,13 +32,13 @@ sudo apt update
 sudo apt install -y nmap whatweb testssl.sh seclists golang
 
 # Install Python dependencies
-pip install -r requirements-gui.txt
-pip install wafw00f
+pip install -r requirements.txt
+
+# Add Go bin to PATH
+echo 'export PATH=$PATH:$HOME/go/bin' >> ~/.bashrc  # or ~/.zshrc for zsh
+source ~/.bashrc
 
 # Install Go tools
-export PATH=$PATH:$HOME/go/bin
-echo 'export PATH=$PATH:$HOME/go/bin' >> ~/.zshrc
-
 go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
@@ -51,6 +52,10 @@ go install -v github.com/tomnomnom/waybackurls@latest
 # Update nuclei templates
 nuclei -update-templates
 ```
+
+### Note on Tool Detection
+
+The tool automatically checks `~/go/bin`, `/root/go/bin`, and other common locations for Go-based tools, so they will work even if your PATH isn't updated. However, adding to PATH is still recommended for CLI usage.
 
 ## Usage
 
@@ -77,13 +82,20 @@ python gui.py
 # Open http://localhost:5000
 ```
 
+The GUI provides:
+- Real-time progress tracking
+- Live log streaming from all scan modules
+- Tool status indicators (green = installed, red = missing)
+- Previous scan results browser
+- Configurable scan options
+
 ## Project Structure
 
 ```
 ASM/
-├── main.py              # CLI tool
-├── gui.py               # Web GUI
-├── requirements-gui.txt # Python dependencies
+├── main.py              # CLI tool with 10 reconnaissance modules
+├── gui.py               # Flask web GUI with Socket.IO
+├── requirements.txt     # Python dependencies
 ├── templates/           # GUI HTML templates
 │   └── index.html
 └── scanned_results/     # Scan outputs (auto-created)
@@ -95,6 +107,24 @@ ASM/
         ├── report.md
         └── ...
 ```
+
+## Required Tools
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| subfinder | Subdomain enumeration | `go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest` |
+| httpx | HTTP probing | `go install github.com/projectdiscovery/httpx/cmd/httpx@latest` |
+| nmap | Port scanning | `apt install nmap` |
+| whatweb | Technology detection | `apt install whatweb` |
+| nuclei | Vulnerability scanning | `go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest` |
+| gowitness | Screenshots | `go install github.com/sensepost/gowitness@latest` |
+| dnsx | DNS enumeration | `go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest` |
+| ffuf | Directory bruteforce | `go install github.com/ffuf/ffuf/v2@latest` |
+| testssl.sh | SSL/TLS analysis | `apt install testssl.sh` |
+| wafw00f | WAF detection | `pip install wafw00f` |
+| katana | Web crawling | `go install github.com/projectdiscovery/katana/cmd/katana@latest` |
+| gau | URL fetching | `go install github.com/lc/gau/v2/cmd/gau@latest` |
+| waybackurls | Archive URLs | `go install github.com/tomnomnom/waybackurls@latest` |
 
 ## License
 

@@ -43,7 +43,7 @@ from main import (
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config['SECRET_KEY'] = os.urandom(24)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Global state for scan management
 active_scans = {}
@@ -65,12 +65,12 @@ class SocketIOLogHandler(logging.Handler):
                 }
                 # Add to scan's log list
                 active_scans[current_scan_id].logs.append(log_entry)
-                # Emit to frontend
+                # Emit to frontend - use socketio.emit for background thread
                 socketio.emit('scan_log', {
                     'scan_id': current_scan_id,
                     'log': log_entry
-                })
-            except Exception:
+                }, namespace='/')
+            except Exception as e:
                 pass  # Don't break on logging errors
 
 
@@ -104,7 +104,7 @@ class ScanManager:
         socketio.emit('scan_log', {
             'scan_id': self.scan_id,
             'log': log_entry
-        })
+        }, namespace='/')
         
     def update_progress(self, phase, progress, status="running"):
         """Update scan progress and emit to frontend."""
@@ -116,7 +116,7 @@ class ScanManager:
             'phase': phase,
             'progress': progress,
             'status': status
-        })
+        }, namespace='/')
     
     def run_scan(self):
         """Execute the full ASM scan pipeline."""
@@ -576,4 +576,5 @@ if __name__ == '__main__':
     ╚═══════════════════════════════════════════════════════════╝
     """)
     
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # Use debug=False or use_reloader=False for proper threading
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
