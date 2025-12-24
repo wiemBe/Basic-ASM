@@ -250,12 +250,21 @@ def module_discovery(target_domain):
         logger.error(f"Domain validation failed: {e}")
         return None
     
-    # Check required tools exist
-    required_tools = ['subfinder', 'httpx-toolkit']
-    for tool in required_tools:
-        if not check_tool_exists(tool):
-            logger.error(f"Missing required tool: {tool}. Please install it first.")
-            return None
+    # Check required tools exist (httpx can be httpx-toolkit or httpx)
+    if not check_tool_exists('subfinder'):
+        logger.error("Missing required tool: subfinder. Please install it first.")
+        return None
+    
+    # Find httpx command (different names on different systems)
+    httpx_cmd = None
+    for cmd in ['httpx-toolkit', 'httpx']:
+        if check_tool_exists(cmd):
+            httpx_cmd = cmd
+            break
+    
+    if not httpx_cmd:
+        logger.error("Missing required tool: httpx. Install: go install github.com/projectdiscovery/httpx/cmd/httpx@latest")
+        return None
     
     # Setup output directory
     output_dir = setup_output_directory(target_domain)
@@ -277,7 +286,7 @@ def module_discovery(target_domain):
 
     # 2. Run HTTPX (Live Host Check)
     logger.info("Running HTTPX to check for live web servers...")
-    httpx_args = ['httpx-toolkit', '-silent', '-sc', '-title']
+    httpx_args = [httpx_cmd, '-silent', '-sc', '-title']
     run_command(httpx_args, input_file=str(subs_file), output_file=str(alive_file))
 
     if alive_file.exists() and alive_file.stat().st_size > 0:

@@ -338,7 +338,7 @@ def get_available_tools():
     """Check which ASM tools are installed."""
     tools = {
         'subfinder': check_tool_exists('subfinder'),
-        'httpx-toolkit': check_tool_exists('httpx-toolkit'),
+        'httpx': check_tool_exists('httpx-toolkit') or check_tool_exists('httpx'),
         'nmap': check_tool_exists('nmap'),
         'whatweb': check_tool_exists('whatweb'),
         'nuclei': check_tool_exists('nuclei'),
