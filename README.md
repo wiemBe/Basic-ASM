@@ -4,7 +4,7 @@ A comprehensive Attack Surface Management tool for security engineers to discove
 
 ## Features
 
-- **10 Reconnaissance Phases:**
+- **13 Reconnaissance Phases:**
   1. Subdomain Discovery (subfinder + httpx)
   2. Port Scanning (nmap)
   3. Technology Detection (whatweb)
@@ -15,10 +15,14 @@ A comprehensive Attack Surface Management tool for security engineers to discove
   8. SSL/TLS Analysis (testssl.sh)
   9. WAF Detection (wafw00f)
   10. API Endpoint Discovery (katana, gau, waybackurls)
+  11. Secret Scanning (trufflehog + regex patterns)
+  12. HTTP Parameter Discovery (arjun)
+  13. Link/Endpoint Extraction (xnLinkFinder)
 
 - **Web GUI** - Modern dashboard with real-time progress and live logs
 - **Security Hardened** - Input validation, no shell injection
 - **Auto Tool Detection** - Finds tools in ~/go/bin even without PATH configured
+- **Smart Deduplication** - Uses anew for efficient result deduplication
 
 ## Installation
 
@@ -48,6 +52,11 @@ go install -v github.com/ffuf/ffuf/v2@latest
 go install -v github.com/sensepost/gowitness@latest
 go install -v github.com/lc/gau/v2/cmd/gau@latest
 go install -v github.com/tomnomnom/waybackurls@latest
+go install -v github.com/tomnomnom/anew@latest
+go install -v github.com/trufflesecurity/trufflehog/v3@latest
+
+# Install Python-based tools
+pip install arjun xnLinkFinder
 
 # Update nuclei templates
 nuclei -update-templates
@@ -62,7 +71,7 @@ The tool automatically checks `~/go/bin`, `/root/go/bin`, and other common locat
 ### Command Line
 
 ```bash
-# Full scan
+# Full scan (all 13 phases)
 python main.py -t example.com
 
 # Discovery only (fast)
@@ -71,8 +80,14 @@ python main.py -t example.com --discovery-only
 # Skip specific modules
 python main.py -t example.com --skip-vuln --skip-dirs
 
+# Skip new modules
+python main.py -t example.com --skip-secrets --skip-params --skip-linkfinder
+
 # Stealth mode (slower, less detectable)
 python main.py -t example.com --rate-limit 3.0
+
+# Scan IP address instead of domain
+python main.py -t 192.168.1.1 --is-ip
 ```
 
 ### Web GUI
@@ -93,7 +108,7 @@ The GUI provides:
 
 ```
 ASM/
-├── main.py              # CLI tool with 10 reconnaissance modules
+├── main.py              # CLI tool with 13 reconnaissance modules
 ├── gui.py               # Flask web GUI with Socket.IO
 ├── requirements.txt     # Python dependencies
 ├── templates/           # GUI HTML templates
@@ -104,6 +119,9 @@ ASM/
         ├── live_hosts.txt
         ├── vulnerabilities.txt
         ├── api_endpoints.txt
+        ├── secrets_found.json
+        ├── discovered_params.json
+        ├── extracted_links.txt
         ├── report.md
         └── ...
 ```
@@ -125,6 +143,41 @@ ASM/
 | katana | Web crawling | `go install github.com/projectdiscovery/katana/cmd/katana@latest` |
 | gau | URL fetching | `go install github.com/lc/gau/v2/cmd/gau@latest` |
 | waybackurls | Archive URLs | `go install github.com/tomnomnom/waybackurls@latest` |
+| trufflehog | Secret scanning | `go install github.com/trufflesecurity/trufflehog/v3@latest` |
+| arjun | Parameter discovery | `pip install arjun` |
+| xnLinkFinder | Link extraction | `pip install xnLinkFinder` |
+| anew | Deduplication | `go install github.com/tomnomnom/anew@latest` |
+
+## CLI Options
+
+```
+Target Options:
+  -t, --target          Target domain (e.g., example.com)
+
+Module Control:
+  --discovery-only      Run only subdomain discovery
+  --skip-ports          Skip port scanning
+  --skip-tech           Skip technology detection
+  --skip-vuln           Skip vulnerability scanning
+  --skip-screenshots    Skip screenshot capture
+  --skip-dns            Skip DNS enumeration
+  --skip-dirs           Skip directory bruteforcing
+  --skip-ssl            Skip SSL/TLS analysis
+  --skip-waf            Skip WAF detection
+  --skip-api            Skip API endpoint discovery
+  --skip-secrets        Skip secret scanning (TruffleHog)
+  --skip-params         Skip parameter discovery (Arjun)
+  --skip-linkfinder     Skip link extraction (xnLinkFinder)
+
+Configuration:
+  --top-ports N         Number of ports to scan (default: 1000)
+  --vuln-severity       Nuclei severity filter (default: medium,high,critical)
+  --rate-limit N        Delay between requests in seconds (default: 1.0)
+  --crawl-depth N       Katana crawl depth (default: 3)
+  --arjun-threads N     Arjun thread count (default: 10)
+  --linkfinder-depth N  xnLinkFinder depth (default: 2)
+  -v, --verbose         Enable debug output
+```
 
 ## License
 

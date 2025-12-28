@@ -37,6 +37,10 @@ from main import (
     module_ssl_analysis,
     module_waf_detect,
     module_api_discovery,
+    module_secret_scan,
+    module_param_discovery,
+    module_link_finder,
+    module_dedupe_results,
     generate_report,
     logger,
     COMMAND_TIMEOUT,
@@ -294,7 +298,7 @@ class ScanManager:
             
             # Phase 10: API Discovery
             if not self.options.get('skip_api'):
-                self.update_progress("API Discovery", 90)
+                self.update_progress("API Discovery", 70)
                 if is_ip:
                     self.log("Phase 10: Running API endpoint discovery (katana only, no historical data for IPs)...")
                 else:
@@ -312,6 +316,68 @@ class ScanManager:
                     self.log(f"Found {count} API endpoints")
             else:
                 self.log("Skipping API discovery")
+            
+            # Phase 11: Secret Scanning
+            if not self.options.get('skip_secrets'):
+                self.update_progress("Secret Scanning", 80)
+                self.log("Phase 11: Running secret/credential scanning...")
+                module_secret_scan(self.output_dir)
+                secrets_file = self.output_dir / "secrets_found.json"
+                if secrets_file.exists():
+                    try:
+                        import json
+                        with open(secrets_file, 'r') as f:
+                            secrets_data = json.load(f)
+                        self.results['secrets'] = len(secrets_data)
+                        if secrets_data:
+                            self.log(f"Found {len(secrets_data)} potential secrets!", "warning")
+                        else:
+                            self.log("No secrets found")
+                    except:
+                        pass
+            else:
+                self.log("Skipping secret scanning")
+            
+            # Phase 12: Parameter Discovery
+            if not self.options.get('skip_params'):
+                self.update_progress("Parameter Discovery", 85)
+                self.log("Phase 12: Running HTTP parameter discovery (Arjun)...")
+                module_param_discovery(self.output_dir, threads=self.options.get('arjun_threads', 10))
+                params_file = self.output_dir / "discovered_params.json"
+                if params_file.exists():
+                    try:
+                        import json
+                        with open(params_file, 'r') as f:
+                            params_data = json.load(f)
+                        unique_params = set()
+                        for url, params in params_data.items():
+                            if isinstance(params, list):
+                                unique_params.update(params)
+                            elif isinstance(params, dict):
+                                unique_params.update(params.keys())
+                        self.results['parameters'] = len(unique_params)
+                        self.log(f"Found {len(unique_params)} unique HTTP parameters")
+                    except:
+                        pass
+            else:
+                self.log("Skipping parameter discovery")
+            
+            # Phase 13: Link Finder
+            if not self.options.get('skip_linkfinder'):
+                self.update_progress("Link Extraction", 90)
+                self.log("Phase 13: Extracting links and endpoints (xnLinkFinder)...")
+                module_link_finder(self.output_dir, depth=self.options.get('linkfinder_depth', 2))
+                links_file = self.output_dir / "extracted_links.txt"
+                if links_file.exists():
+                    count = count_lines_safely(links_file)
+                    self.results['extracted_links'] = count
+                    self.log(f"Extracted {count} links")
+            else:
+                self.log("Skipping link extraction")
+            
+            # Deduplicate results
+            self.log("Deduplicating results...")
+            module_dedupe_results(self.output_dir)
             
             # Generate final report
             self.update_progress("Generating Report", 95)
@@ -350,6 +416,10 @@ def get_available_tools():
         'katana': check_tool_exists('katana'),
         'gau': check_tool_exists('gau'),
         'waybackurls': check_tool_exists('waybackurls'),
+        'trufflehog': check_tool_exists('trufflehog'),
+        'arjun': check_tool_exists('arjun'),
+        'xnLinkFinder': check_tool_exists('xnLinkFinder'),
+        'anew': check_tool_exists('anew'),
     }
     return tools
 
@@ -365,7 +435,10 @@ def get_scan_results(output_dir):
         'dns_records': [],
         'directories': [],
         'ssl_issues': [],
-        'waf_detection': []
+        'waf_detection': [],
+        'secrets': [],
+        'parameters': [],
+        'extracted_links': []
     }
     
     output_path = Path(output_dir)
@@ -393,6 +466,37 @@ def get_scan_results(output_dir):
     if api_file.exists():
         with open(api_file, 'r') as f:
             results['api_endpoints'] = [line.strip() for line in f if line.strip()][:100]
+    
+    # Read secrets
+    secrets_file = output_path / "secrets_found.json"
+    if secrets_file.exists():
+        try:
+            with open(secrets_file, 'r') as f:
+                results['secrets'] = json.load(f)[:50]
+        except:
+            pass
+    
+    # Read discovered parameters
+    params_file = output_path / "discovered_params.json"
+    if params_file.exists():
+        try:
+            with open(params_file, 'r') as f:
+                params_data = json.load(f)
+                unique_params = set()
+                for url, params in params_data.items():
+                    if isinstance(params, list):
+                        unique_params.update(params)
+                    elif isinstance(params, dict):
+                        unique_params.update(params.keys())
+                results['parameters'] = list(unique_params)[:100]
+        except:
+            pass
+    
+    # Read extracted links
+    links_file = output_path / "extracted_links.txt"
+    if links_file.exists():
+        with open(links_file, 'r') as f:
+            results['extracted_links'] = [line.strip() for line in f if line.strip()][:100]
     
     # Read report
     report_file = output_path / "report.md"
@@ -441,6 +545,9 @@ def start_scan():
         'skip_ssl': data.get('skip_ssl', False),
         'skip_waf': data.get('skip_waf', False),
         'skip_api': data.get('skip_api', False),
+        'skip_secrets': data.get('skip_secrets', False),  # TruffleHog/Mantra
+        'skip_params': data.get('skip_params', False),    # Arjun
+        'skip_linkfinder': data.get('skip_linkfinder', False),  # xnLinkFinder
         'is_ip': data.get('is_ip', False),  # IP target mode
         'top_ports': int(data.get('top_ports', 1000)),
         'vuln_severity': data.get('vuln_severity', 'medium,high,critical'),
@@ -449,6 +556,8 @@ def start_scan():
         'crawl_duration': int(data.get('crawl_duration', 300)),
         'ffuf_threads': int(data.get('ffuf_threads', 50)),
         'screenshot_threads': int(data.get('screenshot_threads', 4)),
+        'arjun_threads': int(data.get('arjun_threads', 10)),
+        'linkfinder_depth': int(data.get('linkfinder_depth', 2)),
         'extensions': data.get('extensions', 'php,asp,aspx,jsp,html,js,txt,bak'),
         'wordlist': data.get('wordlist'),
         'nuclei_templates': data.get('nuclei_templates'),

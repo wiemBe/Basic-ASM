@@ -901,6 +901,584 @@ def module_waf_detect(output_dir):
     return True
 
 
+def module_secret_scan(output_dir, scan_js_files=True):
+    """
+    Phase 11: Secret Scanning
+    Scans for secrets, API keys, and credentials using trufflehog.
+    Also scans discovered JS files for hardcoded secrets.
+    """
+    logger.info("Starting Phase 11: Secret Scanning with TruffleHog")
+    
+    secrets_dir = output_dir / "secrets"
+    secrets_dir.mkdir(exist_ok=True)
+    secrets_file = output_dir / "secrets_found.txt"
+    secrets_json = output_dir / "secrets_found.json"
+    
+    # Check for trufflehog
+    if not check_tool_exists('trufflehog'):
+        logger.warning("trufflehog not found. Install: pip install trufflehog or go install github.com/trufflesecurity/trufflehog/v3@latest")
+        logger.info("Falling back to regex-based secret scanning...")
+        return _fallback_secret_scan(output_dir)
+    
+    all_secrets = []
+    
+    # Scan URLs from API discovery if available
+    api_dir = output_dir / "api_discovery"
+    all_urls_file = api_dir / "all_urls.txt" if api_dir.exists() else None
+    js_files_list = api_dir / "js_files.txt" if api_dir.exists() else None
+    
+    # Scan live hosts
+    alive_file = output_dir / "live_hosts.txt"
+    if alive_file.exists() and alive_file.stat().st_size > 0:
+        logger.info("Scanning live hosts for exposed secrets...")
+        rate_limiter.wait()
+        
+        # Extract URLs
+        urls = []
+        with open(alive_file, 'r') as f:
+            for line in f:
+                url = line.split()[0] if line.strip() else None
+                if url and url.startswith('http'):
+                    urls.append(url)
+        
+        # Scan each URL with trufflehog (limited to avoid long scans)
+        for i, url in enumerate(urls[:20], 1):  # Limit to first 20 hosts
+            logger.info(f"[{i}/{min(len(urls), 20)}] Scanning: {url}")
+            output_file = secrets_dir / f"trufflehog_{i}.json"
+            
+            trufflehog_args = [
+                'trufflehog',
+                'filesystem',  # Can also use 'git' for repos
+                '--json',
+                '--no-update',
+                url
+            ]
+            
+            # For web scanning, use the website scanner if available
+            trufflehog_web_args = [
+                'trufflehog',
+                'web',
+                '--json',
+                '--no-update',
+                url
+            ]
+            
+            result = run_command(trufflehog_web_args, timeout=60)
+            if result:
+                try:
+                    for line in result.strip().split('\n'):
+                        if line:
+                            secret = json.loads(line)
+                            secret['source_url'] = url
+                            all_secrets.append(secret)
+                except json.JSONDecodeError:
+                    pass
+    
+    # Scan JS files if available
+    if scan_js_files and js_files_list and js_files_list.exists():
+        logger.info("Scanning JavaScript files for secrets...")
+        with open(js_files_list, 'r') as f:
+            js_urls = [line.strip() for line in f if line.strip()][:50]  # Limit
+        
+        for js_url in js_urls:
+            rate_limiter.wait()
+            result = run_command(['trufflehog', 'web', '--json', '--no-update', js_url], timeout=30)
+            if result:
+                try:
+                    for line in result.strip().split('\n'):
+                        if line:
+                            secret = json.loads(line)
+                            secret['source_url'] = js_url
+                            all_secrets.append(secret)
+                except json.JSONDecodeError:
+                    pass
+    
+    # Write results
+    with open(secrets_json, 'w') as f:
+        json.dump(all_secrets, f, indent=2)
+    
+    with open(secrets_file, 'w') as f:
+        f.write("Secret Scanning Results\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Total secrets found: {len(all_secrets)}\n\n")
+        
+        if all_secrets:
+            for secret in all_secrets:
+                f.write(f"[{secret.get('DetectorName', 'Unknown')}] ")
+                f.write(f"Source: {secret.get('source_url', 'N/A')}\n")
+                f.write(f"  Raw: {secret.get('Raw', 'N/A')[:100]}...\n")
+                f.write("-" * 30 + "\n")
+    
+    logger.info(f"Secret scan complete. Found {len(all_secrets)} potential secrets")
+    logger.info(f"Results saved to: {secrets_file}")
+    return True
+
+
+def _fallback_secret_scan(output_dir):
+    """
+    Fallback regex-based secret scanning when trufflehog is not available.
+    Uses mantra-like patterns to detect secrets in discovered files.
+    """
+    logger.info("Running fallback regex-based secret scanning...")
+    
+    secrets_file = output_dir / "secrets_found.txt"
+    secrets_json = output_dir / "secrets_found.json"
+    
+    # Extended secret patterns (mantra-like)
+    secret_patterns = [
+        # API Keys
+        (r'["\']?api[_-]?key["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'API Key'),
+        (r'["\']?apikey["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'API Key'),
+        (r'x-api-key["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'X-API-Key'),
+        
+        # AWS
+        (r'AKIA[0-9A-Z]{16}', 'AWS Access Key ID'),
+        (r'["\']?aws[_-]?secret[_-]?access[_-]?key["\']?\s*[:=]\s*["\']([^"\']{40})["\']', 'AWS Secret Key'),
+        (r'amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', 'AWS MWS Key'),
+        
+        # Google
+        (r'AIza[0-9A-Za-z\-_]{35}', 'Google API Key'),
+        (r'[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com', 'Google OAuth'),
+        
+        # GitHub
+        (r'ghp_[0-9a-zA-Z]{36}', 'GitHub Personal Token'),
+        (r'gho_[0-9a-zA-Z]{36}', 'GitHub OAuth Token'),
+        (r'ghu_[0-9a-zA-Z]{36}', 'GitHub User Token'),
+        (r'ghs_[0-9a-zA-Z]{36}', 'GitHub Server Token'),
+        (r'ghr_[0-9a-zA-Z]{36}', 'GitHub Refresh Token'),
+        
+        # Slack
+        (r'xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*', 'Slack Token'),
+        (r'https://hooks\.slack\.com/services/T[a-zA-Z0-9_]{8}/B[a-zA-Z0-9_]{8}/[a-zA-Z0-9_]{24}', 'Slack Webhook'),
+        
+        # Stripe
+        (r'sk_live_[0-9a-zA-Z]{24}', 'Stripe Secret Key'),
+        (r'pk_live_[0-9a-zA-Z]{24}', 'Stripe Publishable Key'),
+        (r'rk_live_[0-9a-zA-Z]{24}', 'Stripe Restricted Key'),
+        
+        # JWT
+        (r'eyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+', 'JWT Token'),
+        
+        # Private Keys
+        (r'-----BEGIN RSA PRIVATE KEY-----', 'RSA Private Key'),
+        (r'-----BEGIN DSA PRIVATE KEY-----', 'DSA Private Key'),
+        (r'-----BEGIN EC PRIVATE KEY-----', 'EC Private Key'),
+        (r'-----BEGIN OPENSSH PRIVATE KEY-----', 'OpenSSH Private Key'),
+        (r'-----BEGIN PGP PRIVATE KEY BLOCK-----', 'PGP Private Key'),
+        
+        # Generic Secrets
+        (r'["\']?password["\']?\s*[:=]\s*["\']([^"\']{6,})["\']', 'Password'),
+        (r'["\']?passwd["\']?\s*[:=]\s*["\']([^"\']{6,})["\']', 'Password'),
+        (r'["\']?secret["\']?\s*[:=]\s*["\']([^"\']{6,})["\']', 'Secret'),
+        (r'["\']?token["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'Token'),
+        (r'["\']?auth[_-]?token["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'Auth Token'),
+        (r'["\']?access[_-]?token["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'Access Token'),
+        (r'["\']?refresh[_-]?token["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'Refresh Token'),
+        (r'["\']?client[_-]?secret["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'Client Secret'),
+        (r'["\']?encryption[_-]?key["\']?\s*[:=]\s*["\']([^"\']{10,})["\']', 'Encryption Key'),
+        
+        # Database
+        (r'mongodb(\+srv)?://[^\s<>"\']+', 'MongoDB Connection String'),
+        (r'postgres://[^\s<>"\']+', 'PostgreSQL Connection String'),
+        (r'mysql://[^\s<>"\']+', 'MySQL Connection String'),
+        (r'redis://[^\s<>"\']+', 'Redis Connection String'),
+        
+        # Twilio
+        (r'SK[0-9a-fA-F]{32}', 'Twilio API Key'),
+        (r'AC[a-zA-Z0-9_\-]{32}', 'Twilio Account SID'),
+        
+        # SendGrid
+        (r'SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}', 'SendGrid API Key'),
+        
+        # Mailgun
+        (r'key-[0-9a-zA-Z]{32}', 'Mailgun API Key'),
+        
+        # Firebase
+        (r'AAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}', 'Firebase Cloud Messaging'),
+        
+        # Heroku
+        (r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', 'Heroku API Key'),
+    ]
+    
+    all_secrets = []
+    
+    # Scan all relevant files in output directory
+    files_to_scan = []
+    
+    # API discovery files
+    api_dir = output_dir / "api_discovery"
+    if api_dir.exists():
+        files_to_scan.extend(api_dir.glob("*.txt"))
+    
+    # JS files list
+    js_files = api_dir / "js_files.txt" if api_dir.exists() else None
+    
+    # Scan discovered URLs for secrets in URL patterns
+    all_urls_file = api_dir / "all_urls.txt" if api_dir.exists() else None
+    if all_urls_file and all_urls_file.exists():
+        files_to_scan.append(all_urls_file)
+    
+    for file_path in files_to_scan:
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+                
+            for pattern, secret_type in secret_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    match_str = match if isinstance(match, str) else match[0] if match else ''
+                    if match_str and len(match_str) > 5:
+                        all_secrets.append({
+                            'type': secret_type,
+                            'value': match_str[:100],  # Truncate for safety
+                            'source': str(file_path),
+                            'pattern': pattern[:50]
+                        })
+        except Exception as e:
+            logger.debug(f"Error scanning {file_path}: {e}")
+    
+    # Deduplicate
+    seen = set()
+    unique_secrets = []
+    for secret in all_secrets:
+        key = (secret['type'], secret['value'])
+        if key not in seen:
+            seen.add(key)
+            unique_secrets.append(secret)
+    
+    # Write results
+    with open(secrets_json, 'w') as f:
+        json.dump(unique_secrets, f, indent=2)
+    
+    with open(secrets_file, 'w') as f:
+        f.write("Secret Scanning Results (Regex-based)\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Total unique secrets found: {len(unique_secrets)}\n\n")
+        f.write("⚠️  Note: These are pattern matches. Manual verification required.\n\n")
+        
+        if unique_secrets:
+            for secret in unique_secrets:
+                f.write(f"[{secret['type']}]\n")
+                f.write(f"  Value: {secret['value']}\n")
+                f.write(f"  Source: {secret['source']}\n")
+                f.write("-" * 30 + "\n")
+    
+    logger.info(f"Fallback secret scan complete. Found {len(unique_secrets)} potential secrets")
+    return True
+
+
+def module_param_discovery(output_dir, threads=10):
+    """
+    Phase 12: HTTP Parameter Discovery
+    Discovers hidden GET/POST parameters using Arjun.
+    """
+    logger.info("Starting Phase 12: HTTP Parameter Discovery with Arjun")
+    
+    params_dir = output_dir / "parameters"
+    params_dir.mkdir(exist_ok=True)
+    params_file = output_dir / "discovered_params.txt"
+    params_json = output_dir / "discovered_params.json"
+    
+    alive_file = output_dir / "live_hosts.txt"
+    
+    if not alive_file.exists() or alive_file.stat().st_size == 0:
+        logger.warning("No live hosts file found. Skipping parameter discovery.")
+        return False
+    
+    if not check_tool_exists('arjun'):
+        logger.error("arjun not found. Install: pip install arjun")
+        return False
+    
+    # Extract URLs
+    urls = []
+    with open(alive_file, 'r') as f:
+        for line in f:
+            url = line.split()[0] if line.strip() else None
+            if url and url.startswith('http'):
+                urls.append(url)
+    
+    if not urls:
+        logger.warning("No valid URLs for parameter discovery")
+        return False
+    
+    # Also check for interesting endpoints from API discovery
+    api_file = output_dir / "api_endpoints.txt"
+    if api_file.exists():
+        with open(api_file, 'r') as f:
+            for line in f:
+                url = line.strip()
+                if url and url.startswith('http') and url not in urls:
+                    urls.append(url)
+    
+    urls_file = params_dir / "urls_for_params.txt"
+    with open(urls_file, 'w') as f:
+        f.write('\n'.join(urls[:50]))  # Limit to 50 URLs
+    
+    logger.info(f"Discovering parameters on {min(len(urls), 50)} URLs...")
+    
+    all_params = {}
+    
+    # Run Arjun on each URL
+    for i, url in enumerate(urls[:50], 1):
+        rate_limiter.wait()
+        
+        safe_name = re.sub(r'[^\w\-.]', '_', url.replace('https://', '').replace('http://', ''))[:50]
+        output_file = params_dir / f"{safe_name}.json"
+        
+        logger.info(f"[{i}/{min(len(urls), 50)}] Scanning: {url}")
+        
+        arjun_args = [
+            'arjun',
+            '-u', url,
+            '-t', str(threads),
+            '-oJ', str(output_file),
+            '--stable',             # Be more careful with requests
+            '-q'                    # Quiet mode
+        ]
+        
+        run_command(arjun_args, timeout=120)
+        
+        if output_file.exists():
+            try:
+                with open(output_file, 'r') as f:
+                    data = json.load(f)
+                    if data:
+                        all_params[url] = data
+            except (json.JSONDecodeError, KeyError):
+                pass
+    
+    # Combine results
+    with open(params_json, 'w') as f:
+        json.dump(all_params, f, indent=2)
+    
+    # Count unique parameters
+    unique_params = set()
+    for url, params in all_params.items():
+        if isinstance(params, list):
+            unique_params.update(params)
+        elif isinstance(params, dict):
+            unique_params.update(params.keys())
+    
+    with open(params_file, 'w') as f:
+        f.write("Discovered HTTP Parameters\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"URLs scanned: {min(len(urls), 50)}\n")
+        f.write(f"Unique parameters found: {len(unique_params)}\n\n")
+        
+        if unique_params:
+            f.write("Parameters:\n")
+            f.write("-" * 30 + "\n")
+            for param in sorted(unique_params):
+                f.write(f"  {param}\n")
+            
+            f.write("\n\nDetailed findings:\n")
+            f.write("-" * 30 + "\n")
+            for url, params in all_params.items():
+                if params:
+                    f.write(f"\n{url}:\n")
+                    if isinstance(params, list):
+                        for p in params:
+                            f.write(f"  - {p}\n")
+                    elif isinstance(params, dict):
+                        for p in params.keys():
+                            f.write(f"  - {p}\n")
+    
+    logger.info(f"Parameter discovery complete. Found {len(unique_params)} unique parameters")
+    logger.info(f"Results saved to: {params_file}")
+    return True
+
+
+def module_link_finder(output_dir, depth=2):
+    """
+    Phase 13: Link and Endpoint Extraction
+    Extracts links and endpoints from JavaScript files using xnLinkFinder.
+    """
+    logger.info("Starting Phase 13: Link/Endpoint Extraction with xnLinkFinder")
+    
+    links_dir = output_dir / "linkfinder"
+    links_dir.mkdir(exist_ok=True)
+    links_file = output_dir / "extracted_links.txt"
+    endpoints_file = output_dir / "extracted_endpoints.txt"
+    
+    alive_file = output_dir / "live_hosts.txt"
+    
+    if not alive_file.exists() or alive_file.stat().st_size == 0:
+        logger.warning("No live hosts file found. Skipping link extraction.")
+        return False
+    
+    if not check_tool_exists('xnLinkFinder'):
+        logger.error("xnLinkFinder not found. Install: pip install xnLinkFinder")
+        return False
+    
+    # Extract URLs
+    urls = []
+    with open(alive_file, 'r') as f:
+        for line in f:
+            url = line.split()[0] if line.strip() else None
+            if url and url.startswith('http'):
+                urls.append(url)
+    
+    if not urls:
+        logger.warning("No valid URLs for link extraction")
+        return False
+    
+    urls_file = links_dir / "urls_for_links.txt"
+    with open(urls_file, 'w') as f:
+        f.write('\n'.join(urls[:30]))  # Limit to 30 URLs
+    
+    logger.info(f"Extracting links from {min(len(urls), 30)} URLs...")
+    
+    all_links = set()
+    all_endpoints = set()
+    
+    # Run xnLinkFinder
+    for i, url in enumerate(urls[:30], 1):
+        rate_limiter.wait()
+        
+        safe_name = re.sub(r'[^\w\-.]', '_', url.replace('https://', '').replace('http://', ''))[:50]
+        output_file = links_dir / f"{safe_name}.txt"
+        
+        logger.info(f"[{i}/{min(len(urls), 30)}] Extracting from: {url}")
+        
+        xnlinkfinder_args = [
+            'xnLinkFinder',
+            '-i', url,
+            '-o', str(output_file),
+            '-d', str(depth),
+            '-sf', str(output_dir / "subdomains.txt") if (output_dir / "subdomains.txt").exists() else '',
+            '--include-js',
+            '-v'  # Verbose
+        ]
+        
+        # Remove empty args
+        xnlinkfinder_args = [arg for arg in xnlinkfinder_args if arg]
+        
+        run_command(xnlinkfinder_args, timeout=180)
+        
+        if output_file.exists():
+            with open(output_file, 'r') as f:
+                for line in f:
+                    link = line.strip()
+                    if link:
+                        all_links.add(link)
+                        # Identify potential API endpoints
+                        if any(pattern in link.lower() for pattern in [
+                            '/api/', '/v1/', '/v2/', '/v3/', '/rest/', '/graphql',
+                            '/ajax/', '/json/', '/xml/', '/rpc/', '/soap/',
+                            '.json', '.xml', '/query', '/mutation'
+                        ]):
+                            all_endpoints.add(link)
+    
+    # Write combined results
+    with open(links_file, 'w') as f:
+        f.write(f"Extracted Links ({len(all_links)} total)\n")
+        f.write("=" * 50 + "\n\n")
+        for link in sorted(all_links):
+            f.write(f"{link}\n")
+    
+    with open(endpoints_file, 'w') as f:
+        f.write(f"Extracted API Endpoints ({len(all_endpoints)} total)\n")
+        f.write("=" * 50 + "\n\n")
+        for endpoint in sorted(all_endpoints):
+            f.write(f"{endpoint}\n")
+    
+    logger.info(f"Link extraction complete. Found {len(all_links)} links, {len(all_endpoints)} endpoints")
+    logger.info(f"Results saved to: {links_file}")
+    return True
+
+
+def dedupe_with_anew(input_file, output_file=None):
+    """
+    Utility function to deduplicate file contents using anew.
+    If anew is not available, falls back to Python-based deduplication.
+    
+    Args:
+        input_file: Path to file to deduplicate
+        output_file: Path to write deduplicated output (optional, modifies in place if None)
+    
+    Returns:
+        Number of unique lines
+    """
+    input_path = Path(input_file)
+    if not input_path.exists():
+        return 0
+    
+    if check_tool_exists('anew'):
+        # Use anew for deduplication
+        logger.debug(f"Deduplicating {input_file} with anew...")
+        
+        temp_file = input_path.parent / f"{input_path.stem}_temp{input_path.suffix}"
+        output_path = Path(output_file) if output_file else input_path
+        
+        # anew appends unique lines, so we need to process differently
+        # Read all lines and pipe through anew
+        anew_args = ['anew', str(temp_file)]
+        
+        with open(input_path, 'r') as f:
+            content = f.read()
+        
+        result = run_command(anew_args, input_file=str(input_path))
+        
+        if temp_file.exists():
+            # Move temp to output
+            shutil.move(str(temp_file), str(output_path))
+            return count_lines_safely(output_path)
+        else:
+            # Fallback if anew didn't work as expected
+            return _python_dedupe(input_path, output_path)
+    else:
+        # Python fallback
+        output_path = Path(output_file) if output_file else input_path
+        return _python_dedupe(input_path, output_path)
+
+
+def _python_dedupe(input_path, output_path):
+    """Python-based deduplication fallback."""
+    seen = set()
+    unique_lines = []
+    
+    with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            line = line.strip()
+            if line and line not in seen:
+                seen.add(line)
+                unique_lines.append(line)
+    
+    with open(output_path, 'w') as f:
+        f.write('\n'.join(unique_lines))
+    
+    return len(unique_lines)
+
+
+def module_dedupe_results(output_dir):
+    """
+    Utility module to deduplicate all result files using anew.
+    This improves result quality by removing duplicates.
+    """
+    logger.info("Deduplicating results with anew...")
+    
+    files_to_dedupe = [
+        "subdomains.txt",
+        "live_hosts.txt",
+        "api_endpoints.txt",
+        "extracted_links.txt",
+        "extracted_endpoints.txt",
+        "api_discovery/all_urls.txt",
+        "api_discovery/js_files.txt",
+        "api_discovery/parameters.txt"
+    ]
+    
+    for file_name in files_to_dedupe:
+        file_path = output_dir / file_name
+        if file_path.exists() and file_path.stat().st_size > 0:
+            original_count = count_lines_safely(file_path)
+            unique_count = dedupe_with_anew(file_path)
+            if original_count > unique_count:
+                logger.info(f"Deduplicated {file_name}: {original_count} -> {unique_count} lines")
+    
+    return True
+
+
 def module_api_discovery(output_dir, depth=3, crawl_duration=300, skip_historical=False):
     """
     Phase 10: API Endpoint Discovery
@@ -1277,6 +1855,64 @@ def generate_report(output_dir, target_domain):
             count = count_lines_safely(api_file)
             f.write(f"## API Endpoints Discovered: {count}\n\n")
         
+        # Secret Scanning Results
+        secrets_file = output_dir / "secrets_found.txt"
+        secrets_json = output_dir / "secrets_found.json"
+        if secrets_json.exists():
+            try:
+                with open(secrets_json, 'r') as sf:
+                    secrets_data = json.load(sf)
+                if secrets_data:
+                    f.write(f"## 🔐 Secrets/Credentials Found: {len(secrets_data)}\n\n")
+                    f.write("⚠️ **WARNING: Potential sensitive data exposed!**\n\n")
+                    f.write("```\n")
+                    for secret in secrets_data[:10]:  # Show first 10
+                        if isinstance(secret, dict):
+                            f.write(f"[{secret.get('type', secret.get('DetectorName', 'Unknown'))}] ")
+                            f.write(f"{secret.get('value', secret.get('Raw', 'N/A'))[:50]}...\n")
+                    f.write("```\n\n")
+                else:
+                    f.write("## ✅ No Secrets/Credentials Exposed\n\n")
+            except (json.JSONDecodeError, KeyError):
+                pass
+        
+        # HTTP Parameter Discovery Results
+        params_file = output_dir / "discovered_params.txt"
+        params_json = output_dir / "discovered_params.json"
+        if params_json.exists():
+            try:
+                with open(params_json, 'r') as pf:
+                    params_data = json.load(pf)
+                unique_params = set()
+                for url, params in params_data.items():
+                    if isinstance(params, list):
+                        unique_params.update(params)
+                    elif isinstance(params, dict):
+                        unique_params.update(params.keys())
+                if unique_params:
+                    f.write(f"## 🔧 Hidden HTTP Parameters: {len(unique_params)}\n\n")
+                    f.write("```\n")
+                    f.write(', '.join(sorted(list(unique_params))[:30]))
+                    f.write("\n```\n\n")
+            except (json.JSONDecodeError, KeyError):
+                pass
+        
+        # Link Finder Results
+        links_file = output_dir / "extracted_links.txt"
+        endpoints_file = output_dir / "extracted_endpoints.txt"
+        if links_file.exists() and links_file.stat().st_size > 0:
+            link_count = count_lines_safely(links_file)
+            f.write(f"## 🔗 Extracted Links: {link_count}\n\n")
+        if endpoints_file.exists() and endpoints_file.stat().st_size > 0:
+            endpoint_count = count_lines_safely(endpoints_file)
+            f.write(f"## 🎯 Extracted Endpoints: {endpoint_count}\n\n")
+            f.write("```\n")
+            with open(endpoints_file, 'r') as ef:
+                lines = ef.readlines()[2:22]  # Skip header, show 20
+                for line in lines:
+                    f.write(line)
+            f.write("```\n\n")
+        
         f.write("---\n")
         f.write(f"\n*Report generated by ASM Tool*\n")
     
@@ -1300,6 +1936,9 @@ Examples:
   %(prog)s -t example.com --skip-ssl --skip-waf  # Skip SSL and WAF checks
   %(prog)s -t example.com --crawl-depth 5    # Deeper API crawling
   %(prog)s -t example.com --skip-api         # Skip API endpoint discovery
+  %(prog)s -t example.com --skip-secrets     # Skip secret scanning (TruffleHog)
+  %(prog)s -t example.com --skip-params      # Skip parameter discovery (Arjun)
+  %(prog)s -t example.com --skip-linkfinder  # Skip link extraction (xnLinkFinder)
         """
     )
     
@@ -1361,6 +2000,21 @@ Examples:
         action="store_true",
         help="Skip API endpoint discovery"
     )
+    parser.add_argument(
+        "--skip-secrets",
+        action="store_true",
+        help="Skip secret/credential scanning"
+    )
+    parser.add_argument(
+        "--skip-params",
+        action="store_true",
+        help="Skip HTTP parameter discovery (Arjun)"
+    )
+    parser.add_argument(
+        "--skip-linkfinder",
+        action="store_true",
+        help="Skip link/endpoint extraction (xnLinkFinder)"
+    )
     
     # Module configuration
     parser.add_argument(
@@ -1416,6 +2070,18 @@ Examples:
         type=int,
         default=300,
         help="Max crawl duration in seconds (default: 300)"
+    )
+    parser.add_argument(
+        "--arjun-threads",
+        type=int,
+        default=10,
+        help="Number of threads for Arjun parameter discovery (default: 10)"
+    )
+    parser.add_argument(
+        "--linkfinder-depth",
+        type=int,
+        default=2,
+        help="xnLinkFinder crawl depth (default: 2)"
     )
     
     # General options
@@ -1544,6 +2210,27 @@ Examples:
         )
     else:
         logger.info("Skipping API discovery (--skip-api)")
+    
+    # Phase 11: Secret Scanning (TruffleHog/Mantra)
+    if not args.skip_secrets:
+        module_secret_scan(output_dir)
+    else:
+        logger.info("Skipping secret scanning (--skip-secrets)")
+    
+    # Phase 12: HTTP Parameter Discovery (Arjun)
+    if not args.skip_params:
+        module_param_discovery(output_dir, threads=args.arjun_threads)
+    else:
+        logger.info("Skipping parameter discovery (--skip-params)")
+    
+    # Phase 13: Link/Endpoint Extraction (xnLinkFinder)
+    if not args.skip_linkfinder:
+        module_link_finder(output_dir, depth=args.linkfinder_depth)
+    else:
+        logger.info("Skipping link extraction (--skip-linkfinder)")
+    
+    # Deduplicate results using anew
+    module_dedupe_results(output_dir)
     
     # Generate final report
     generate_report(output_dir, args.target)
