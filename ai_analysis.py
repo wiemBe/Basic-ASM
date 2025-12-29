@@ -38,27 +38,31 @@ class GeminiAnalyzer:
             lite_mode: If True, uses shorter prompts and fewer analyses (better for free tier)
         """
         self.api_key = api_key or os.environ.get('GEMINI_API_KEY')
-        self.model = None
+        self.client = None
         self.initialized = False
         self.lite_mode = lite_mode
         
         if not GEMINI_AVAILABLE:
-            logger.error("google-generativeai package not installed")
+            logger.error("google-genai package not installed. Run: pip install google-genai")
             return
         
         if not self.api_key:
-            logger.warning("No Gemini API key provided. Set GEMINI_API_KEY environment variable or pass api_key parameter.")
+            logger.error("No Gemini API key provided!")
+            logger.error("Set GEMINI_API_KEY environment variable or use --gemini-api-key flag")
             return
         
         try:
             # Initialize the new google.genai client
+            logger.info(f"Initializing Gemini with API key: {self.api_key[:10]}...")
             self.client = genai.Client(api_key=self.api_key)
-            # Use Gemini 2.0 Flash (latest) or fallback to 1.5
-            self.model_name = 'gemini-2.0-flash'
+            # Use Gemini 2.0 Flash (latest)
+            self.model_name = 'gemini-2.0-flash-exp'
             self.initialized = True
-            logger.info(f"Gemini AI analyzer initialized {'(lite mode)' if lite_mode else ''}")
+            logger.info(f"Gemini AI analyzer initialized successfully {'(lite mode)' if lite_mode else ''}")
         except Exception as e:
             logger.error(f"Failed to initialize Gemini: {e}")
+            import traceback
+            traceback.print_exc()
     
     def is_available(self):
         """Check if the analyzer is ready to use."""
@@ -69,16 +73,18 @@ class GeminiAnalyzer:
         global _last_request_time
         
         if not self.is_available():
+            logger.error("Analyzer not available for generation")
             return None
         
         # Rate limiting for free tier
         elapsed = time.time() - _last_request_time
         if elapsed < GEMINI_RATE_LIMIT_DELAY:
             wait_time = GEMINI_RATE_LIMIT_DELAY - elapsed
-            logger.debug(f"Rate limiting: waiting {wait_time:.1f}s before next API call")
+            logger.info(f"Rate limiting: waiting {wait_time:.1f}s before next API call")
             time.sleep(wait_time)
         
         try:
+            logger.info(f"Calling Gemini API (model: {self.model_name})...")
             _last_request_time = time.time()
             response = self.client.models.generate_content(
                 model=self.model_name,
@@ -88,9 +94,11 @@ class GeminiAnalyzer:
                     temperature=0.3,  # Lower temperature for more focused responses
                 )
             )
+            logger.info("Gemini API call successful")
             return response.text
         except Exception as e:
             error_msg = str(e).lower()
+            logger.error(f"Gemini API error: {e}")
             if 'quota' in error_msg or 'rate' in error_msg or '429' in error_msg:
                 logger.warning("Rate limit hit. Waiting 60 seconds before retry...")
                 time.sleep(60)
@@ -109,7 +117,6 @@ class GeminiAnalyzer:
                 except Exception as retry_error:
                     logger.error(f"Retry failed: {retry_error}")
                     return None
-            logger.error(f"Gemini API error: {e}")
             return None
     
     def analyze_vulnerabilities(self, vulnerabilities, target_domain):
@@ -354,11 +361,19 @@ def analyze_scan_with_ai(output_dir, api_key=None, lite_mode=True):
     Returns:
         Dict containing all AI analyses
     """
+    logger.info(f"Starting AI analysis for: {output_dir}")
     output_path = Path(output_dir)
+    
+    if not output_path.exists():
+        logger.error(f"Output directory not found: {output_dir}")
+        return None
+    
     analyzer = GeminiAnalyzer(api_key, lite_mode=lite_mode)
     
     if not analyzer.is_available():
-        logger.error("AI analyzer not available. Check API key and dependencies.")
+        logger.error("AI analyzer not available!")
+        if not api_key and not os.environ.get('GEMINI_API_KEY'):
+            logger.error("No API key found. Use --gemini-api-key or set GEMINI_API_KEY env variable")
         return None
     
     results = {}
