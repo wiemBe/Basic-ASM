@@ -266,9 +266,11 @@ def extract_urls_from_file(filepath):
 
 
 def setup_output_directory(target_domain):
-    """Create a dedicated output directory for the scan results."""
+    """Create a dedicated output directory for the scan results with timestamp."""
     safe_domain = re.sub(r'[^\w\-.]', '_', target_domain)
-    output_path = Path(OUTPUT_DIR) / safe_domain
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    folder_name = f"{safe_domain}_{timestamp}"
+    output_path = Path(OUTPUT_DIR) / folder_name
     output_path.mkdir(parents=True, exist_ok=True)
     
     # Setup file logging in the output directory
@@ -277,6 +279,7 @@ def setup_output_directory(target_domain):
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     logger.addHandler(file_handler)
     
+    logger.info(f"Scan started at: {timestamp}")
     return output_path
 
 def module_discovery(target_domain):

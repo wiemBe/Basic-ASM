@@ -152,8 +152,12 @@ class ScanManager:
             if is_ip:
                 self.update_progress("IP Setup", 10)
                 self.log("Phase 1: Setting up IP target (skipping subdomain discovery)...")
-                # Create output directory for IP
-                self.output_dir = Path(OUTPUT_DIR) / validated_target.replace(':', '_')
+                # Create output directory for IP with timestamp
+                from datetime import datetime
+                safe_target = validated_target.replace(':', '_')
+                timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+                folder_name = f"{safe_target}_{timestamp}"
+                self.output_dir = Path(OUTPUT_DIR) / folder_name
                 self.output_dir.mkdir(parents=True, exist_ok=True)
                 
                 # Create live_hosts.txt with the IP
