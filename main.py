@@ -222,6 +222,49 @@ def count_lines_safely(filepath):
         logger.error(f"Error reading file {filepath}: {e}")
         return 0
 
+
+def extract_urls_from_file(filepath):
+    """
+    Extract valid URLs from a file (like live_hosts.txt).
+    Handles various formats from httpx output.
+    Returns list of URLs with http:// or https:// prefix.
+    """
+    urls = []
+    if not filepath.exists() or filepath.stat().st_size == 0:
+        return urls
+    
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Get first column (URL or host)
+            first_col = line.split()[0] if line.split() else line
+            
+            # If already has protocol, use it
+            if first_col.startswith('http://') or first_col.startswith('https://'):
+                urls.append(first_col)
+            else:
+                # No protocol - add both http and https variants
+                # Remove any trailing path/port for clean host
+                host = first_col.split('/')[0]
+                if host and '.' in host:  # Basic domain validation
+                    # Add https first (more common), then http
+                    urls.append(f"https://{host}")
+                    urls.append(f"http://{host}")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_urls = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+    
+    return unique_urls
+
+
 def setup_output_directory(target_domain):
     """Create a dedicated output directory for the scan results."""
     safe_domain = re.sub(r'[^\w\-.]', '_', target_domain)
@@ -385,12 +428,7 @@ def module_tech_detect(output_dir):
         return False
     
     # Extract URLs from alive hosts
-    urls = []
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url)
+    urls = extract_urls_from_file(alive_file)
     
     if not urls:
         logger.warning("No valid URLs for tech detection")
@@ -443,12 +481,7 @@ def module_vuln_scan(output_dir, severity="medium,high,critical", templates=None
         return False
     
     # Extract URLs
-    urls = []
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url)
+    urls = extract_urls_from_file(alive_file)
     
     if not urls:
         logger.warning("No valid URLs for vulnerability scanning")
@@ -510,12 +543,7 @@ def module_screenshot(output_dir, threads=4):
         return False
     
     # Extract URLs
-    urls = []
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url)
+    urls = extract_urls_from_file(alive_file)
     
     if not urls:
         logger.warning("No valid URLs for screenshots")
@@ -641,12 +669,7 @@ def module_dir_bruteforce(output_dir, wordlist=None, threads=50, extensions="php
     logger.info(f"Using wordlist: {selected_wordlist}")
     
     # Extract URLs
-    urls = []
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url.rstrip('/'))
+    urls = [url.rstrip('/') for url in extract_urls_from_file(alive_file)]
     
     if not urls:
         logger.warning("No valid URLs for directory bruteforcing")
@@ -837,12 +860,7 @@ def module_waf_detect(output_dir):
         return False
     
     # Extract URLs
-    urls = []
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url)
+    urls = extract_urls_from_file(alive_file)
     
     if not urls:
         logger.warning("No valid URLs for WAF detection")
@@ -933,13 +951,8 @@ def module_secret_scan(output_dir, scan_js_files=True):
         logger.info("Scanning live hosts for exposed secrets...")
         rate_limiter.wait()
         
-        # Extract URLs
-        urls = []
-        with open(alive_file, 'r') as f:
-            for line in f:
-                url = line.split()[0] if line.strip() else None
-                if url and url.startswith('http'):
-                    urls.append(url)
+        # Extract URLs using helper that handles httpx output format
+        urls = extract_urls_from_file(alive_file)
         
         # Scan each URL with trufflehog (limited to avoid long scans)
         for i, url in enumerate(urls[:20], 1):  # Limit to first 20 hosts
@@ -1189,13 +1202,8 @@ def module_param_discovery(output_dir, threads=10):
         logger.error("arjun not found. Install: pip install arjun")
         return False
     
-    # Extract URLs
-    urls = []
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url)
+    # Extract URLs using helper that handles httpx output format
+    urls = extract_urls_from_file(alive_file)
     
     if not urls:
         logger.warning("No valid URLs for parameter discovery")
@@ -1204,11 +1212,10 @@ def module_param_discovery(output_dir, threads=10):
     # Also check for interesting endpoints from API discovery
     api_file = output_dir / "api_endpoints.txt"
     if api_file.exists():
-        with open(api_file, 'r') as f:
-            for line in f:
-                url = line.strip()
-                if url and url.startswith('http') and url not in urls:
-                    urls.append(url)
+        api_urls = extract_urls_from_file(api_file)
+        for url in api_urls:
+            if url not in urls:
+                urls.append(url)
     
     urls_file = params_dir / "urls_for_params.txt"
     with open(urls_file, 'w') as f:
@@ -1310,13 +1317,8 @@ def module_link_finder(output_dir, depth=2):
         logger.error("xnLinkFinder not found. Install: pip install xnLinkFinder")
         return False
     
-    # Extract URLs
-    urls = []
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url)
+    # Extract URLs using helper that handles httpx output format
+    urls = extract_urls_from_file(alive_file)
     
     if not urls:
         logger.warning("No valid URLs for link extraction")
@@ -1509,16 +1511,12 @@ def module_api_discovery(output_dir, depth=3, crawl_duration=300, skip_historica
         return False
     
     # Extract base URLs and domains
-    urls = []
+    urls = extract_urls_from_file(alive_file)
     domains = set()
-    with open(alive_file, 'r') as f:
-        for line in f:
-            url = line.split()[0] if line.strip() else None
-            if url and url.startswith('http'):
-                urls.append(url)
-                # Extract domain
-                domain = re.sub(r'^https?://', '', url).split('/')[0].split(':')[0]
-                domains.add(domain)
+    for url in urls:
+        # Extract domain
+        domain = re.sub(r'^https?://', '', url).split('/')[0].split(':')[0]
+        domains.add(domain)
     
     if not urls:
         logger.warning("No valid URLs for API discovery")
