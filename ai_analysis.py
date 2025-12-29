@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 GEMINI_RATE_LIMIT_DELAY = 5  # seconds between requests (safe for free tier)
 _last_request_time = 0
 
+# Chunking configuration to avoid token limits
+# Approximate token estimation: ~4 chars per token
+MAX_CHARS_PER_CHUNK = 3000  # ~750 tokens per chunk (safe margin)
+MAX_ITEMS_PER_CHUNK = 5     # Max items to analyze per API call
+MAX_TOTAL_CHUNKS = 10       # Max chunks to process (avoid too many API calls)
+
 # Try to import Google GenAI (new package)
 try:
     from google import genai
@@ -119,9 +125,140 @@ class GeminiAnalyzer:
                     return None
             return None
     
+    def _chunk_items(self, items, max_chars=MAX_CHARS_PER_CHUNK, max_items=MAX_ITEMS_PER_CHUNK):
+        """
+        Split items into chunks that fit within token limits.
+        
+        Args:
+            items: List of strings to chunk
+            max_chars: Maximum characters per chunk
+            max_items: Maximum items per chunk
+        
+        Returns:
+            List of chunks, each chunk is a list of items
+        """
+        chunks = []
+        current_chunk = []
+        current_size = 0
+        
+        for item in items:
+            item_str = str(item)
+            item_size = len(item_str)
+            
+            # Check if adding this item would exceed limits
+            if (current_size + item_size > max_chars or 
+                len(current_chunk) >= max_items) and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_size = 0
+            
+            current_chunk.append(item_str)
+            current_size += item_size
+        
+        # Don't forget the last chunk
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        return chunks[:MAX_TOTAL_CHUNKS]  # Limit total chunks
+    
+    def analyze_single_vulnerability(self, vulnerability, target_domain):
+        """
+        Analyze a single vulnerability finding.
+        
+        Args:
+            vulnerability: Single vulnerability string from nuclei output
+            target_domain: The target domain being scanned
+        
+        Returns:
+            Brief analysis of this specific vulnerability
+        """
+        prompt = f"""Analyze this vulnerability found on {target_domain}:
+
+{vulnerability}
+
+Provide brief analysis (2-3 sentences each):
+1. **Severity**: Critical/High/Medium/Low and why
+2. **Impact**: What could an attacker do
+3. **Fix**: How to remediate
+
+Be concise."""
+        
+        return self._safe_generate(prompt, max_tokens=500)
+    
+    def analyze_vulnerabilities_chunked(self, vulnerabilities, target_domain):
+        """
+        Analyze vulnerabilities in chunks to avoid token limits.
+        Processes each finding individually then aggregates results.
+        
+        Args:
+            vulnerabilities: List of vulnerability strings from nuclei output
+            target_domain: The target domain being scanned
+        
+        Returns:
+            Aggregated AI-generated analysis
+        """
+        if not vulnerabilities:
+            return "No vulnerabilities to analyze."
+        
+        logger.info(f"Analyzing {len(vulnerabilities)} vulnerabilities in chunks...")
+        
+        # Chunk the vulnerabilities
+        chunks = self._chunk_items(vulnerabilities)
+        logger.info(f"Split into {len(chunks)} chunks (max {MAX_ITEMS_PER_CHUNK} items each)")
+        
+        all_analyses = []
+        
+        for i, chunk in enumerate(chunks, 1):
+            logger.info(f"Analyzing chunk {i}/{len(chunks)} ({len(chunk)} items)...")
+            
+            chunk_text = "\n---\n".join(chunk)
+            
+            prompt = f"""You are a cybersecurity expert. Analyze these {len(chunk)} vulnerabilities found on {target_domain}:
+
+{chunk_text}
+
+For each vulnerability, provide:
+- Severity (Critical/High/Medium/Low)
+- Brief impact description
+- Quick fix recommendation
+
+Be concise - 2-3 lines per vulnerability."""
+            
+            analysis = self._safe_generate(prompt, max_tokens=1000)
+            if analysis:
+                all_analyses.append(f"### Batch {i} Analysis\n\n{analysis}")
+            
+            # Rate limit between chunks
+            if i < len(chunks):
+                time.sleep(GEMINI_RATE_LIMIT_DELAY)
+        
+        if not all_analyses:
+            return "Failed to analyze vulnerabilities."
+        
+        # Generate final summary if we have multiple chunks
+        if len(all_analyses) > 1:
+            logger.info("Generating combined summary...")
+            time.sleep(GEMINI_RATE_LIMIT_DELAY)
+            
+            summary_prompt = f"""Based on {len(vulnerabilities)} vulnerabilities found on {target_domain}, provide:
+
+1. **Risk Level**: Overall (Critical/High/Medium/Low)
+2. **Top 3 Priorities**: Most urgent fixes
+3. **Common Patterns**: Recurring vulnerability types
+4. **Hardening Advice**: General security improvements
+
+Be concise."""
+            
+            summary = self._safe_generate(summary_prompt, max_tokens=800)
+            if summary:
+                all_analyses.insert(0, f"## Overall Summary\n\n{summary}\n\n---")
+        
+        return "\n\n".join(all_analyses)
+    
     def analyze_vulnerabilities(self, vulnerabilities, target_domain):
         """
         Analyze discovered vulnerabilities and provide remediation advice.
+        Automatically uses chunked analysis for large result sets.
         
         Args:
             vulnerabilities: List of vulnerability strings from nuclei output
@@ -133,9 +270,14 @@ class GeminiAnalyzer:
         if not vulnerabilities:
             return "No vulnerabilities to analyze."
         
-        # Limit to first 20 vulnerabilities to avoid token limits
-        vuln_sample = vulnerabilities[:20]
-        vuln_text = "\n".join(vuln_sample)
+        # If too many vulnerabilities, use chunked analysis
+        total_chars = sum(len(str(v)) for v in vulnerabilities)
+        if len(vulnerabilities) > MAX_ITEMS_PER_CHUNK or total_chars > MAX_CHARS_PER_CHUNK:
+            logger.info(f"Large result set ({len(vulnerabilities)} items, ~{total_chars} chars) - using chunked analysis")
+            return self.analyze_vulnerabilities_chunked(vulnerabilities, target_domain)
+        
+        # Small enough for single request
+        vuln_text = "\n".join(vulnerabilities)
         
         prompt = f"""You are a cybersecurity expert analyzing vulnerability scan results for {target_domain}.
 
@@ -154,9 +296,69 @@ Be concise but thorough. Focus on actionable advice."""
 
         return self._safe_generate(prompt, max_tokens=3000)
     
+    def analyze_secrets_chunked(self, secrets):
+        """
+        Analyze secrets in chunks to avoid token limits.
+        
+        Args:
+            secrets: List of secret findings (dicts with type, value, source)
+        
+        Returns:
+            Aggregated AI analysis
+        """
+        if not secrets:
+            return "No secrets to analyze."
+        
+        logger.info(f"Analyzing {len(secrets)} secrets in chunks...")
+        
+        # Redact and prepare secrets
+        redacted_secrets = []
+        for secret in secrets:
+            redacted = {
+                'type': secret.get('type', 'Unknown'),
+                'source': secret.get('source', 'Unknown'),
+                'value_preview': secret.get('value', '')[:10] + '...' if secret.get('value') else 'N/A'
+            }
+            redacted_secrets.append(json.dumps(redacted))
+        
+        # Chunk the secrets
+        chunks = self._chunk_items(redacted_secrets)
+        logger.info(f"Split into {len(chunks)} chunks")
+        
+        all_analyses = []
+        
+        for i, chunk in enumerate(chunks, 1):
+            logger.info(f"Analyzing secrets chunk {i}/{len(chunks)} ({len(chunk)} items)...")
+            
+            chunk_text = "\n".join(chunk)
+            
+            prompt = f"""Analyze these {len(chunk)} exposed secrets:
+
+{chunk_text}
+
+For each:
+- Severity (Critical/High/Medium/Low)
+- What attacker could do
+- Immediate action needed
+
+Be concise."""
+            
+            analysis = self._safe_generate(prompt, max_tokens=800)
+            if analysis:
+                all_analyses.append(f"### Secrets Batch {i}\n\n{analysis}")
+            
+            if i < len(chunks):
+                time.sleep(GEMINI_RATE_LIMIT_DELAY)
+        
+        if not all_analyses:
+            return "Failed to analyze secrets."
+        
+        return "\n\n".join(all_analyses)
+    
     def analyze_secrets(self, secrets):
         """
         Analyze discovered secrets and classify their severity.
+        Automatically uses chunked analysis for large result sets.
         
         Args:
             secrets: List of secret findings (dicts with type, value, source)
@@ -167,9 +369,14 @@ Be concise but thorough. Focus on actionable advice."""
         if not secrets:
             return "No secrets to analyze."
         
+        # Check if we need chunked analysis
+        if len(secrets) > MAX_ITEMS_PER_CHUNK:
+            logger.info(f"Large secrets set ({len(secrets)} items) - using chunked analysis")
+            return self.analyze_secrets_chunked(secrets)
+        
         # Redact actual secret values for safety
         redacted_secrets = []
-        for secret in secrets[:15]:
+        for secret in secrets:
             redacted = {
                 'type': secret.get('type', 'Unknown'),
                 'source': secret.get('source', 'Unknown'),
@@ -314,6 +521,7 @@ Focus on practical, actionable next steps."""
     def quick_summary(self, target_domain, scan_results):
         """
         Generate a quick combined summary (for lite mode - single API call).
+        Limits data sent to avoid token limits.
         
         Args:
             target_domain: The scanned domain
@@ -322,21 +530,30 @@ Focus on practical, actionable next steps."""
         Returns:
             Combined analysis in one response
         """
+        vulns = scan_results.get('vulnerabilities', [])
+        secrets = scan_results.get('secrets', [])
+        
+        # Only include a few sample vulnerabilities to avoid token limits
+        sample_vulns = []
+        for v in vulns[:3]:
+            # Truncate long vulnerability strings
+            v_str = str(v)[:200] + '...' if len(str(v)) > 200 else str(v)
+            sample_vulns.append(v_str)
+        
         stats = {
             'target': target_domain,
             'subdomains': len(scan_results.get('subdomains', [])),
             'live_hosts': len(scan_results.get('live_hosts', [])),
-            'vulnerabilities': len(scan_results.get('vulnerabilities', [])),
-            'secrets_exposed': len(scan_results.get('secrets', [])),
+            'vulnerabilities': len(vulns),
+            'secrets_exposed': len(secrets),
             'api_endpoints': len(scan_results.get('api_endpoints', [])),
-            'sample_vulns': scan_results.get('vulnerabilities', [])[:5],
         }
         
         prompt = f"""Analyze this security scan of {target_domain}:
 
 Stats: {stats['subdomains']} subdomains, {stats['live_hosts']} live hosts, {stats['vulnerabilities']} vulnerabilities, {stats['secrets_exposed']} secrets, {stats['api_endpoints']} API endpoints
 
-Sample vulnerabilities: {stats['sample_vulns'][:3] if stats['sample_vulns'] else 'None'}
+Sample vulnerabilities (showing 3 of {len(vulns)}): {sample_vulns if sample_vulns else 'None found'}
 
 Provide a brief security assessment:
 1. Risk Level (Critical/High/Medium/Low)
