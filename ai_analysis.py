@@ -53,8 +53,8 @@ class GeminiAnalyzer:
         try:
             # Initialize the new google.genai client
             self.client = genai.Client(api_key=self.api_key)
-            # Use Gemini 1.5 Flash for faster responses and lower quota usage
-            self.model_name = 'gemini-1.5-flash'
+            # Use Gemini 2.0 Flash (latest) or fallback to 1.5
+            self.model_name = 'gemini-2.0-flash'
             self.initialized = True
             logger.info(f"Gemini AI analyzer initialized {'(lite mode)' if lite_mode else ''}")
         except Exception as e:
