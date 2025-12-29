@@ -1939,6 +1939,8 @@ Examples:
   %(prog)s -t example.com --skip-secrets     # Skip secret scanning (TruffleHog)
   %(prog)s -t example.com --skip-params      # Skip parameter discovery (Arjun)
   %(prog)s -t example.com --skip-linkfinder  # Skip link extraction (xnLinkFinder)
+  %(prog)s -t example.com --ai-analysis      # Run AI analysis with Gemini
+  %(prog)s -t example.com --ai-analysis --gemini-api-key YOUR_KEY  # With explicit API key
         """
     )
     
@@ -2108,6 +2110,17 @@ Examples:
         default=None,
         help="Custom output directory (default: auto-generated)"
     )
+    parser.add_argument(
+        "--ai-analysis",
+        action="store_true",
+        help="Run AI-powered analysis on results using Gemini"
+    )
+    parser.add_argument(
+        "--gemini-api-key",
+        type=str,
+        default=None,
+        help="Gemini API key (or set GEMINI_API_KEY env variable)"
+    )
     
     args = parser.parse_args()
     
@@ -2234,6 +2247,22 @@ Examples:
     
     # Generate final report
     generate_report(output_dir, args.target)
+    
+    # AI Analysis (optional)
+    if args.ai_analysis:
+        logger.info("Running AI-powered analysis with Gemini...")
+        try:
+            from ai_analysis import analyze_scan_with_ai
+            ai_results = analyze_scan_with_ai(output_dir, args.gemini_api_key)
+            if ai_results:
+                logger.info("AI analysis completed successfully!")
+                logger.info(f"AI report saved to: {output_dir}/ai_analysis.md")
+            else:
+                logger.warning("AI analysis failed. Check your API key.")
+        except ImportError:
+            logger.error("AI analysis module not found. Make sure ai_analysis.py exists.")
+        except Exception as e:
+            logger.error(f"AI analysis error: {e}")
     
     logger.info("=" * 60)
     logger.info("ASM scan completed successfully!")
