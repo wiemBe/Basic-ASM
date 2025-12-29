@@ -16,13 +16,14 @@ logger = logging.getLogger(__name__)
 GEMINI_RATE_LIMIT_DELAY = 5  # seconds between requests (safe for free tier)
 _last_request_time = 0
 
-# Try to import Google Generative AI
+# Try to import Google GenAI (new package)
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-    logger.warning("google-generativeai not installed. Run: pip install google-generativeai")
+    logger.warning("google-genai not installed. Run: pip install google-genai")
 
 
 class GeminiAnalyzer:
@@ -50,9 +51,10 @@ class GeminiAnalyzer:
             return
         
         try:
-            genai.configure(api_key=self.api_key)
+            # Initialize the new google.genai client
+            self.client = genai.Client(api_key=self.api_key)
             # Use Gemini 1.5 Flash for faster responses and lower quota usage
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.model_name = 'gemini-1.5-flash'
             self.initialized = True
             logger.info(f"Gemini AI analyzer initialized {'(lite mode)' if lite_mode else ''}")
         except Exception as e:
@@ -60,7 +62,7 @@ class GeminiAnalyzer:
     
     def is_available(self):
         """Check if the analyzer is ready to use."""
-        return self.initialized and self.model is not None
+        return self.initialized and hasattr(self, 'client') and self.client is not None
     
     def _safe_generate(self, prompt, max_tokens=2048):
         """Safely generate content with error handling and rate limiting."""
@@ -78,9 +80,10 @@ class GeminiAnalyzer:
         
         try:
             _last_request_time = time.time()
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
                     max_output_tokens=max_tokens,
                     temperature=0.3,  # Lower temperature for more focused responses
                 )
@@ -94,9 +97,10 @@ class GeminiAnalyzer:
                 # Retry once
                 try:
                     _last_request_time = time.time()
-                    response = self.model.generate_content(
-                        prompt,
-                        generation_config=genai.types.GenerationConfig(
+                    response = self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
                             max_output_tokens=max_tokens,
                             temperature=0.3,
                         )

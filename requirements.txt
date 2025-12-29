@@ -5,7 +5,7 @@ python-socketio>=5.10.0
 wafw00f>=2.2.0
 
 # AI Analysis (optional - for Gemini integration)
-google-generativeai>=0.3.0
+google-genai>=1.0.0
 
 # Additional reconnaissance tools
 arjun>=2.2.0
