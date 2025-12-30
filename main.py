@@ -247,6 +247,7 @@ def extract_urls_from_file(filepath):
     """
     urls = []
     if not filepath.exists() or filepath.stat().st_size == 0:
+        logger.debug(f"extract_urls_from_file: File empty or doesn't exist: {filepath}")
         return urls
     
     with open(filepath, 'r') as f:
@@ -255,12 +256,15 @@ def extract_urls_from_file(filepath):
             if not line:
                 continue
             
+            logger.debug(f"extract_urls_from_file: Processing line: {line[:100]}")
+            
             # Get first column (URL or host)
             first_col = line.split()[0] if line.split() else line
             
             # If already has protocol, use it
             if first_col.startswith('http://') or first_col.startswith('https://'):
                 urls.append(first_col)
+                logger.debug(f"extract_urls_from_file: Found URL with protocol: {first_col}")
             else:
                 # No protocol - add both http and https variants
                 # Remove any trailing path/port for clean host
@@ -269,6 +273,7 @@ def extract_urls_from_file(filepath):
                     # Add https first (more common), then http
                     urls.append(f"https://{host}")
                     urls.append(f"http://{host}")
+                    logger.debug(f"extract_urls_from_file: Added protocols for host: {host}")
     
     # Remove duplicates while preserving order
     seen = set()
@@ -448,9 +453,14 @@ def module_tech_detect(output_dir):
     
     # Extract URLs from alive hosts
     urls = extract_urls_from_file(alive_file)
+    logger.info(f"Extracted {len(urls)} URLs from live_hosts.txt")
     
     if not urls:
         logger.warning("No valid URLs for tech detection")
+        # Debug: show what's in the file
+        with open(alive_file, 'r') as f:
+            content = f.read()
+            logger.warning(f"live_hosts.txt content (first 500 chars): {content[:500]}")
         return False
     
     # Write URLs to temp file
