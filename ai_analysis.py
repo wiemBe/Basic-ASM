@@ -585,12 +585,18 @@ def analyze_scan_with_ai(output_dir, api_key=None, lite_mode=True):
         logger.error(f"Output directory not found: {output_dir}")
         return None
     
+    # Check for API key first
+    effective_api_key = api_key or os.environ.get('GEMINI_API_KEY')
+    if not effective_api_key:
+        logger.error("No Gemini API key found!")
+        logger.error("Use --gemini-api-key YOUR_KEY or set GEMINI_API_KEY environment variable")
+        logger.error("Get a free API key at: https://makersuite.google.com/app/apikey")
+        return None
+    
     analyzer = GeminiAnalyzer(api_key, lite_mode=lite_mode)
     
     if not analyzer.is_available():
-        logger.error("AI analyzer not available!")
-        if not api_key and not os.environ.get('GEMINI_API_KEY'):
-            logger.error("No API key found. Use --gemini-api-key or set GEMINI_API_KEY env variable")
+        logger.error("AI analyzer failed to initialize! Check logs above for details.")
         return None
     
     results = {}

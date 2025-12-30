@@ -2259,11 +2259,14 @@ Examples:
                 logger.info("AI analysis completed successfully!")
                 logger.info(f"AI report saved to: {output_dir}/ai_analysis.md")
             else:
-                logger.warning("AI analysis failed. Check your API key.")
-        except ImportError:
-            logger.error("AI analysis module not found. Make sure ai_analysis.py exists.")
+                logger.warning("AI analysis returned no results. See errors above.")
+        except ImportError as e:
+            logger.error(f"AI analysis module not found: {e}")
+            logger.error("Make sure ai_analysis.py exists and google-genai is installed")
         except Exception as e:
             logger.error(f"AI analysis error: {e}")
+            import traceback
+            traceback.print_exc()
     
     logger.info("=" * 60)
     logger.info("ASM scan completed successfully!")
