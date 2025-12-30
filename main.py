@@ -7,6 +7,7 @@ import shutil
 import logging
 import time
 import json
+import ipaddress
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -50,6 +51,98 @@ class RateLimiter:
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
+
+
+# Target type constants
+TARGET_TYPE_DOMAIN = 'domain'
+TARGET_TYPE_IP = 'ip'
+TARGET_TYPE_CIDR = 'cidr'
+
+
+def detect_target_type(target):
+    """
+    Auto-detect whether target is a domain, IP address, or CIDR range.
+    Returns: TARGET_TYPE_DOMAIN, TARGET_TYPE_IP, or TARGET_TYPE_CIDR
+    """
+    target = target.strip()
+    
+    # Check for CIDR notation (contains /)
+    if '/' in target:
+        try:
+            ipaddress.ip_network(target, strict=False)
+            return TARGET_TYPE_CIDR
+        except ValueError:
+            pass
+    
+    # Check if it's a valid IP address
+    try:
+        ipaddress.ip_address(target)
+        return TARGET_TYPE_IP
+    except ValueError:
+        pass
+    
+    # Default to domain
+    return TARGET_TYPE_DOMAIN
+
+
+def expand_cidr(cidr_notation, max_hosts=256):
+    """
+    Expand a CIDR notation to a list of individual IP addresses.
+    
+    Args:
+        cidr_notation: CIDR string like '192.168.1.0/24'
+        max_hosts: Maximum number of hosts to return (to prevent massive scans)
+    
+    Returns:
+        List of IP address strings
+    """
+    try:
+        network = ipaddress.ip_network(cidr_notation, strict=False)
+        hosts = list(network.hosts())  # Excludes network and broadcast addresses
+        
+        if len(hosts) > max_hosts:
+            logger.warning(f"CIDR {cidr_notation} contains {len(hosts)} hosts, limiting to {max_hosts}")
+            logger.warning(f"Use --max-cidr-hosts to increase limit")
+            hosts = hosts[:max_hosts]
+        
+        return [str(ip) for ip in hosts]
+    except ValueError as e:
+        logger.error(f"Invalid CIDR notation '{cidr_notation}': {e}")
+        return []
+
+
+def parse_targets_from_list(targets_list, max_cidr_hosts=256):
+    """
+    Parse a list of targets (domains, IPs, CIDRs) and expand CIDRs.
+    Auto-detects target type for each entry.
+    
+    Args:
+        targets_list: List of target strings
+        max_cidr_hosts: Maximum hosts to expand from each CIDR
+    
+    Returns:
+        List of tuples: (target, target_type)
+    """
+    parsed_targets = []
+    
+    for target in targets_list:
+        target = target.strip()
+        if not target or target.startswith('#'):
+            continue
+        
+        target_type = detect_target_type(target)
+        
+        if target_type == TARGET_TYPE_CIDR:
+            # Expand CIDR to individual IPs
+            expanded_ips = expand_cidr(target, max_cidr_hosts)
+            logger.info(f"Expanded CIDR {target} to {len(expanded_ips)} hosts")
+            for ip in expanded_ips:
+                parsed_targets.append((ip, TARGET_TYPE_IP))
+        else:
+            parsed_targets.append((target, target_type))
+    
+    return parsed_targets
+
 
 def is_valid_ip(ip):
     """
@@ -335,6 +428,34 @@ def setup_output_directory(target_domain):
     
     logger.info(f"Scan started at: {timestamp}")
     return output_path
+
+
+def module_discovery_ip(target_ip):
+    """
+    Phase 1 for IP targets: Skip subdomain discovery, set up IP for scanning.
+    """
+    logger.info(f"Starting Phase 1: IP Target Setup for {target_ip}")
+    
+    # Validate IP before proceeding
+    try:
+        validated_ip, _ = validate_target(target_ip, is_ip=True)
+    except ValueError as e:
+        logger.error(f"IP validation failed: {e}")
+        return None
+    
+    # Setup output directory
+    output_dir = setup_output_directory(validated_ip)
+    alive_file = output_dir / "live_hosts.txt"
+    
+    # Create live_hosts.txt with the IP (both http and https)
+    logger.info(f"Setting up IP target: {validated_ip}")
+    with open(alive_file, 'w') as f:
+        f.write(f"https://{validated_ip}\n")
+        f.write(f"http://{validated_ip}\n")
+    
+    logger.info(f"IP target configured. Results will be saved in: {output_dir}")
+    return output_dir
+
 
 def module_discovery(target_domain):
     """
@@ -2004,7 +2125,9 @@ def main():
         epilog="""
 Examples:
   %(prog)s -t example.com                    # Run all modules (full ASM scan)
-  %(prog)s -l domains.txt                    # Scan multiple domains from file
+  %(prog)s -t 192.168.1.1                    # Scan an IP address (auto-detected)
+  %(prog)s -t 192.168.1.0/24                 # Scan a CIDR range (auto-expands)
+  %(prog)s -l targets.txt                    # Scan mixed list (domains, IPs, CIDRs)
   %(prog)s -t example.com --discovery-only   # Only subdomain discovery
   %(prog)s -t example.com --skip-vuln        # Skip vulnerability scanning
   %(prog)s -t example.com --skip-dirs        # Skip directory bruteforcing  
@@ -2018,8 +2141,8 @@ Examples:
   %(prog)s -t example.com --skip-params      # Skip parameter discovery (Arjun)
   %(prog)s -t example.com --skip-linkfinder  # Skip link extraction (xnLinkFinder)
   %(prog)s -t example.com --ai-analysis      # Run AI analysis with Gemini
-  %(prog)s -t example.com --ai-analysis --gemini-api-key YOUR_KEY  # With explicit API key
-  %(prog)s -l domains.txt --ai-analysis      # Scan multiple domains with AI analysis
+  %(prog)s -t 10.0.0.0/28 --max-cidr-hosts 50  # Scan small subnet with limit
+  %(prog)s -l targets.txt --ai-analysis      # Scan mixed targets with AI analysis
         """
     )
     
@@ -2027,11 +2150,26 @@ Examples:
     target_group = parser.add_mutually_exclusive_group(required=True)
     target_group.add_argument(
         "-t", "--target",
-        help="Single target domain (e.g., example.com)"
+        help="Single target: domain (example.com), IP (192.168.1.1), or CIDR (192.168.1.0/24)"
     )
     target_group.add_argument(
         "-l", "--list",
-        help="File containing list of domains to scan (one per line)"
+        help="File containing list of targets (domains, IPs, CIDRs - one per line)"
+    )
+    
+    # IP target mode (legacy, now auto-detected)
+    parser.add_argument(
+        "--ip",
+        action="store_true",
+        help="Force IP mode (usually auto-detected)"
+    )
+    
+    # CIDR options
+    parser.add_argument(
+        "--max-cidr-hosts",
+        type=int,
+        default=256,
+        help="Maximum hosts to scan from a CIDR range (default: 256)"
     )
     
     # Module control flags
@@ -2225,20 +2363,32 @@ Examples:
     """)
     
     # Determine targets (single or list)
-    targets = []
+    raw_targets = []
     if args.target:
-        targets = [args.target]
+        raw_targets = [args.target]
     elif args.list:
         if not os.path.exists(args.list):
             logger.error(f"Targets file not found: {args.list}")
             sys.exit(1)
         with open(args.list, 'r') as f:
-            targets = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-        if not targets:
+            raw_targets = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        if not raw_targets:
             logger.error(f"No valid targets found in: {args.list}")
             sys.exit(1)
-        logger.info(f"Loaded {len(targets)} targets from {args.list}")
+        logger.info(f"Loaded {len(raw_targets)} targets from {args.list}")
     
+    # Parse and expand targets (handles domains, IPs, and CIDRs)
+    parsed_targets = parse_targets_from_list(raw_targets, max_cidr_hosts=args.max_cidr_hosts)
+    
+    # If --ip flag is set, force all targets to be treated as IPs
+    if args.ip:
+        parsed_targets = [(t, TARGET_TYPE_IP) for t, _ in parsed_targets]
+    
+    # Count target types
+    domain_count = sum(1 for _, t in parsed_targets if t == TARGET_TYPE_DOMAIN)
+    ip_count = sum(1 for _, t in parsed_targets if t == TARGET_TYPE_IP)
+    
+    logger.info(f"Total targets to scan: {len(parsed_targets)} ({domain_count} domains, {ip_count} IPs)")
     logger.info(f"Rate limit: {args.rate_limit}s | Timeout: {args.timeout}s")
     
     # Track overall duration for multi-target scans
@@ -2247,46 +2397,51 @@ Examples:
     failed_scans = []
     
     # Process each target
-    for target_idx, target in enumerate(targets, 1):
-        if len(targets) > 1:
+    for target_idx, (target, target_type) in enumerate(parsed_targets, 1):
+        type_label = "IP" if target_type == TARGET_TYPE_IP else "Domain"
+        
+        if len(parsed_targets) > 1:
             logger.info("=" * 60)
-            logger.info(f"[{target_idx}/{len(targets)}] Starting scan for: {target}")
+            logger.info(f"[{target_idx}/{len(parsed_targets)}] Starting scan for {type_label}: {target}")
             logger.info("=" * 60)
         else:
-            logger.info(f"Target: {target}")
+            logger.info(f"Target ({type_label}): {target}")
+        
+        is_ip = (target_type == TARGET_TYPE_IP)
         
         # Track scan duration for this target
         scan_start_time = time.time()
         
         try:
             # Run the scan for this target
-            output_dir = run_scan_for_target(args, target)
+            output_dir = run_scan_for_target(args, target, is_ip=is_ip)
             
             if output_dir:
                 scan_duration = time.time() - scan_start_time
                 completed_scans.append({
                     'target': target,
+                    'type': type_label,
                     'output_dir': str(output_dir),
                     'duration': scan_duration
                 })
                 logger.info(f"Scan for {target} completed in {format_duration(scan_duration)}")
             else:
-                failed_scans.append({'target': target, 'reason': 'Discovery failed'})
+                failed_scans.append({'target': target, 'type': type_label, 'reason': 'Discovery failed'})
                 
         except Exception as e:
             logger.error(f"Error scanning {target}: {e}")
-            failed_scans.append({'target': target, 'reason': str(e)})
+            failed_scans.append({'target': target, 'type': type_label, 'reason': str(e)})
             continue
     
     # Print summary for multi-target scans
     total_duration = time.time() - total_start_time
     
-    if len(targets) > 1:
+    if len(parsed_targets) > 1:
         logger.info("")
         logger.info("=" * 60)
         logger.info("MULTI-TARGET SCAN SUMMARY")
         logger.info("=" * 60)
-        logger.info(f"Total targets: {len(targets)}")
+        logger.info(f"Total targets: {len(parsed_targets)} ({domain_count} domains, {ip_count} IPs)")
         logger.info(f"Completed: {len(completed_scans)}")
         logger.info(f"Failed: {len(failed_scans)}")
         logger.info(f"Total time: {format_duration(total_duration)}")
@@ -2295,12 +2450,12 @@ Examples:
         if completed_scans:
             logger.info("Completed scans:")
             for scan in completed_scans:
-                logger.info(f"  ✓ {scan['target']} -> {scan['output_dir']} ({format_duration(scan['duration'])})")
+                logger.info(f"  ✓ [{scan.get('type', 'Unknown')}] {scan['target']} -> {scan['output_dir']} ({format_duration(scan['duration'])})")
         
         if failed_scans:
             logger.info("Failed scans:")
             for scan in failed_scans:
-                logger.info(f"  ✗ {scan['target']} - {scan['reason']}")
+                logger.info(f"  ✗ [{scan.get('type', 'Unknown')}] {scan['target']} - {scan['reason']}")
         
         # Save summary to file
         summary_file = Path(OUTPUT_DIR) / f"batch_scan_summary_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
@@ -2308,19 +2463,19 @@ Examples:
             f.write(f"ASM Batch Scan Summary\n")
             f.write(f"=====================\n\n")
             f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Total targets: {len(targets)}\n")
+            f.write(f"Total targets: {len(parsed_targets)} ({domain_count} domains, {ip_count} IPs)\n")
             f.write(f"Completed: {len(completed_scans)}\n")
             f.write(f"Failed: {len(failed_scans)}\n")
             f.write(f"Total duration: {format_duration(total_duration)}\n\n")
             
             f.write("Completed scans:\n")
             for scan in completed_scans:
-                f.write(f"  - {scan['target']}: {scan['output_dir']} ({format_duration(scan['duration'])})\n")
+                f.write(f"  - [{scan.get('type', 'Unknown')}] {scan['target']}: {scan['output_dir']} ({format_duration(scan['duration'])})\n")
             
             if failed_scans:
                 f.write("\nFailed scans:\n")
                 for scan in failed_scans:
-                    f.write(f"  - {scan['target']}: {scan['reason']}\n")
+                    f.write(f"  - [{scan.get('type', 'Unknown')}] {scan['target']}: {scan['reason']}\n")
         
         logger.info(f"Summary saved to: {summary_file}")
     
@@ -2331,16 +2486,25 @@ Examples:
     sys.exit(0 if not failed_scans else 1)
 
 
-def run_scan_for_target(args, target):
+def run_scan_for_target(args, target, is_ip=False):
     """
     Run the full scan pipeline for a single target.
     Returns the output directory path on success, None on failure.
+    
+    Args:
+        args: Parsed command line arguments
+        target: Domain or IP to scan
+        is_ip: If True, treat target as IP address (skip subdomain discovery)
     """
     # Track scan duration
     scan_start_time = time.time()
     
-    # Phase 1: Discovery (always runs)
-    output_dir = module_discovery(target)
+    # Phase 1: Discovery
+    if is_ip:
+        logger.info(f"IP mode: Skipping subdomain discovery for {target}")
+        output_dir = module_discovery_ip(target)
+    else:
+        output_dir = module_discovery(target)
     
     if not output_dir:
         logger.error(f"Discovery phase failed for {target}")
