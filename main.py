@@ -1812,7 +1812,22 @@ def module_api_discovery(output_dir, depth=3, crawl_duration=300, skip_historica
     return True
 
 
-def generate_report(output_dir, target_domain):
+def format_duration(seconds):
+    """Format duration in seconds to human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.1f} seconds"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{minutes}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours}h {minutes}m {secs}s"
+
+
+def generate_report(output_dir, target_domain, scan_duration=None):
     """
     Generate a summary report of all findings.
     """
@@ -1822,8 +1837,10 @@ def generate_report(output_dir, target_domain):
     
     with open(report_file, 'w') as f:
         f.write(f"# ASM Report: {target_domain}\n\n")
-        f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write("---\n\n")
+        f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        if scan_duration is not None:
+            f.write(f"**Scan Duration:** {format_duration(scan_duration)}\n")
+        f.write("\n---\n\n")
         
         # Subdomain count
         subs_file = output_dir / "subdomains.txt"
@@ -2204,6 +2221,9 @@ Examples:
     logger.info(f"Target: {args.target}")
     logger.info(f"Rate limit: {args.rate_limit}s | Timeout: {args.timeout}s")
     
+    # Track scan duration
+    scan_start_time = time.time()
+    
     # Phase 1: Discovery (always runs)
     output_dir = module_discovery(args.target)
     
@@ -2214,7 +2234,9 @@ Examples:
     # If discovery only, stop here
     if args.discovery_only:
         logger.info("Discovery-only mode. Stopping here.")
-        generate_report(output_dir, args.target)
+        scan_duration = time.time() - scan_start_time
+        generate_report(output_dir, args.target, scan_duration)
+        logger.info(f"Scan completed in {format_duration(scan_duration)}")
         sys.exit(0)
     
     # Phase 2: Port Scanning
@@ -2305,8 +2327,11 @@ Examples:
     # Deduplicate results using anew
     module_dedupe_results(output_dir)
     
+    # Calculate scan duration
+    scan_duration = time.time() - scan_start_time
+    
     # Generate final report
-    generate_report(output_dir, args.target)
+    generate_report(output_dir, args.target, scan_duration)
     
     # AI Analysis (optional)
     if args.ai_analysis:
@@ -2329,6 +2354,7 @@ Examples:
     
     logger.info("=" * 60)
     logger.info("ASM scan completed successfully!")
+    logger.info(f"Total scan time: {format_duration(scan_duration)}")
     logger.info(f"All results saved in: {output_dir}")
     logger.info("=" * 60)
     
