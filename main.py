@@ -107,20 +107,36 @@ def validate_domain(domain):
 
 def check_tool_exists(tool_name):
     """Verify required tools are installed before running."""
-    # First check if tool is in PATH
+    # IMPORTANT: Check Go binaries FIRST for tools that have Python package conflicts
+    go_priority_tools = ['httpx', 'nuclei', 'subfinder', 'dnsx', 'katana', 'gau', 'waybackurls', 'anew', 'gowitness']
+    
+    if tool_name in go_priority_tools:
+        go_paths = [
+            os.path.expanduser("~/go/bin"),
+            "/root/go/bin",
+            "/usr/local/go/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+        ]
+        for bin_path in go_paths:
+            tool_path = os.path.join(bin_path, tool_name)
+            if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
+                return True
+    
+    # Check if tool is in PATH
     if shutil.which(tool_name) is not None:
         return True
     
     # Check common binary locations (in case PATH not updated)
     common_paths = [
-        # Python venv bin directory (for pip-installed tools like arjun, xnLinkFinder)
-        os.path.join(sys.prefix, 'bin'),
-        os.path.join(sys.prefix, 'Scripts'),  # Windows venv
         # Go binaries
         os.path.expanduser("~/go/bin"),
         "/root/go/bin",
         "/usr/local/go/bin",
         os.path.expanduser("~/.local/bin"),
+        # Python venv bin directory (for pip-installed tools like arjun, xnLinkFinder)
+        os.path.join(sys.prefix, 'bin'),
+        os.path.join(sys.prefix, 'Scripts'),  # Windows venv
         # testssl.sh common locations
         "/usr/bin",
         "/usr/local/bin",
@@ -149,21 +165,38 @@ def check_tool_exists(tool_name):
 
 def get_tool_path(tool_name):
     """Get the full path to a tool, checking common locations."""
-    # First check if tool is in PATH
+    # IMPORTANT: Check Go binaries FIRST for tools that have Python package conflicts
+    # (e.g., 'httpx' exists as both a Go tool and Python package)
+    go_priority_tools = ['httpx', 'nuclei', 'subfinder', 'dnsx', 'katana', 'gau', 'waybackurls', 'anew', 'gowitness']
+    
+    if tool_name in go_priority_tools:
+        go_paths = [
+            os.path.expanduser("~/go/bin"),
+            "/root/go/bin",
+            "/usr/local/go/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+        ]
+        for bin_path in go_paths:
+            tool_path = os.path.join(bin_path, tool_name)
+            if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
+                return tool_path
+    
+    # Then check if tool is in PATH
     path = shutil.which(tool_name)
     if path:
         return path
     
     # Check common binary locations
     common_paths = [
-        # Python venv bin directory (for pip-installed tools)
-        os.path.join(sys.prefix, 'bin'),
-        os.path.join(sys.prefix, 'Scripts'),  # Windows venv
         # Go binaries
         os.path.expanduser("~/go/bin"),
         "/root/go/bin",
         "/usr/local/go/bin",
         os.path.expanduser("~/.local/bin"),
+        # Python venv bin directory (for pip-installed tools)
+        os.path.join(sys.prefix, 'bin'),
+        os.path.join(sys.prefix, 'Scripts'),  # Windows venv
         # testssl.sh common locations
         "/usr/bin",
         "/usr/local/bin",
