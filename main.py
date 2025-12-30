@@ -830,8 +830,8 @@ def module_dir_bruteforce(output_dir, wordlist=None, threads=50, extensions="php
     
     # Default wordlist locations (common on Kali/security distros)
     default_wordlists = [
-        '/usr/share/wordlists/dirb/common.txt',
-        '/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt',
+        '/usr/share/wordlists/dirb/wordlists/common.txt',
+        '/usr/share/wordlists/dirbuster/wordlists/directory-list-2.3-medium.txt',
         '/usr/share/seclists/Discovery/Web-Content/common.txt',
         '/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt'
     ]
