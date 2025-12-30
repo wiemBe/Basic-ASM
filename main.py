@@ -2004,6 +2004,7 @@ def main():
         epilog="""
 Examples:
   %(prog)s -t example.com                    # Run all modules (full ASM scan)
+  %(prog)s -l domains.txt                    # Scan multiple domains from file
   %(prog)s -t example.com --discovery-only   # Only subdomain discovery
   %(prog)s -t example.com --skip-vuln        # Skip vulnerability scanning
   %(prog)s -t example.com --skip-dirs        # Skip directory bruteforcing  
@@ -2018,14 +2019,19 @@ Examples:
   %(prog)s -t example.com --skip-linkfinder  # Skip link extraction (xnLinkFinder)
   %(prog)s -t example.com --ai-analysis      # Run AI analysis with Gemini
   %(prog)s -t example.com --ai-analysis --gemini-api-key YOUR_KEY  # With explicit API key
+  %(prog)s -l domains.txt --ai-analysis      # Scan multiple domains with AI analysis
         """
     )
     
-    # Target options
-    parser.add_argument(
+    # Target options (mutually exclusive: single target or list)
+    target_group = parser.add_mutually_exclusive_group(required=True)
+    target_group.add_argument(
         "-t", "--target",
-        help="The target domain (e.g., example.com)",
-        required=True
+        help="Single target domain (e.g., example.com)"
+    )
+    target_group.add_argument(
+        "-l", "--list",
+        help="File containing list of domains to scan (one per line)"
     )
     
     # Module control flags
@@ -2218,26 +2224,134 @@ Examples:
     ╚═══════════════════════════════════════════════════════════╝
     """)
     
-    logger.info(f"Target: {args.target}")
+    # Determine targets (single or list)
+    targets = []
+    if args.target:
+        targets = [args.target]
+    elif args.list:
+        if not os.path.exists(args.list):
+            logger.error(f"Targets file not found: {args.list}")
+            sys.exit(1)
+        with open(args.list, 'r') as f:
+            targets = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        if not targets:
+            logger.error(f"No valid targets found in: {args.list}")
+            sys.exit(1)
+        logger.info(f"Loaded {len(targets)} targets from {args.list}")
+    
     logger.info(f"Rate limit: {args.rate_limit}s | Timeout: {args.timeout}s")
     
+    # Track overall duration for multi-target scans
+    total_start_time = time.time()
+    completed_scans = []
+    failed_scans = []
+    
+    # Process each target
+    for target_idx, target in enumerate(targets, 1):
+        if len(targets) > 1:
+            logger.info("=" * 60)
+            logger.info(f"[{target_idx}/{len(targets)}] Starting scan for: {target}")
+            logger.info("=" * 60)
+        else:
+            logger.info(f"Target: {target}")
+        
+        # Track scan duration for this target
+        scan_start_time = time.time()
+        
+        try:
+            # Run the scan for this target
+            output_dir = run_scan_for_target(args, target)
+            
+            if output_dir:
+                scan_duration = time.time() - scan_start_time
+                completed_scans.append({
+                    'target': target,
+                    'output_dir': str(output_dir),
+                    'duration': scan_duration
+                })
+                logger.info(f"Scan for {target} completed in {format_duration(scan_duration)}")
+            else:
+                failed_scans.append({'target': target, 'reason': 'Discovery failed'})
+                
+        except Exception as e:
+            logger.error(f"Error scanning {target}: {e}")
+            failed_scans.append({'target': target, 'reason': str(e)})
+            continue
+    
+    # Print summary for multi-target scans
+    total_duration = time.time() - total_start_time
+    
+    if len(targets) > 1:
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("MULTI-TARGET SCAN SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"Total targets: {len(targets)}")
+        logger.info(f"Completed: {len(completed_scans)}")
+        logger.info(f"Failed: {len(failed_scans)}")
+        logger.info(f"Total time: {format_duration(total_duration)}")
+        logger.info("")
+        
+        if completed_scans:
+            logger.info("Completed scans:")
+            for scan in completed_scans:
+                logger.info(f"  ✓ {scan['target']} -> {scan['output_dir']} ({format_duration(scan['duration'])})")
+        
+        if failed_scans:
+            logger.info("Failed scans:")
+            for scan in failed_scans:
+                logger.info(f"  ✗ {scan['target']} - {scan['reason']}")
+        
+        # Save summary to file
+        summary_file = Path(OUTPUT_DIR) / f"batch_scan_summary_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+        with open(summary_file, 'w') as f:
+            f.write(f"ASM Batch Scan Summary\n")
+            f.write(f"=====================\n\n")
+            f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total targets: {len(targets)}\n")
+            f.write(f"Completed: {len(completed_scans)}\n")
+            f.write(f"Failed: {len(failed_scans)}\n")
+            f.write(f"Total duration: {format_duration(total_duration)}\n\n")
+            
+            f.write("Completed scans:\n")
+            for scan in completed_scans:
+                f.write(f"  - {scan['target']}: {scan['output_dir']} ({format_duration(scan['duration'])})\n")
+            
+            if failed_scans:
+                f.write("\nFailed scans:\n")
+                for scan in failed_scans:
+                    f.write(f"  - {scan['target']}: {scan['reason']}\n")
+        
+        logger.info(f"Summary saved to: {summary_file}")
+    
+    logger.info("=" * 60)
+    logger.info("All scans completed!")
+    logger.info("=" * 60)
+    
+    sys.exit(0 if not failed_scans else 1)
+
+
+def run_scan_for_target(args, target):
+    """
+    Run the full scan pipeline for a single target.
+    Returns the output directory path on success, None on failure.
+    """
     # Track scan duration
     scan_start_time = time.time()
     
     # Phase 1: Discovery (always runs)
-    output_dir = module_discovery(args.target)
+    output_dir = module_discovery(target)
     
     if not output_dir:
-        logger.error("Discovery phase failed. Exiting.")
-        sys.exit(1)
+        logger.error(f"Discovery phase failed for {target}")
+        return None
     
     # If discovery only, stop here
     if args.discovery_only:
         logger.info("Discovery-only mode. Stopping here.")
         scan_duration = time.time() - scan_start_time
-        generate_report(output_dir, args.target, scan_duration)
-        logger.info(f"Scan completed in {format_duration(scan_duration)}")
-        sys.exit(0)
+        generate_report(output_dir, target, scan_duration)
+        return output_dir
     
     # Phase 2: Port Scanning
     if not args.skip_ports:
@@ -2331,7 +2445,7 @@ Examples:
     scan_duration = time.time() - scan_start_time
     
     # Generate final report
-    generate_report(output_dir, args.target, scan_duration)
+    generate_report(output_dir, target, scan_duration)
     
     # AI Analysis (optional)
     if args.ai_analysis:
@@ -2352,13 +2466,8 @@ Examples:
             import traceback
             traceback.print_exc()
     
-    logger.info("=" * 60)
-    logger.info("ASM scan completed successfully!")
-    logger.info(f"Total scan time: {format_duration(scan_duration)}")
-    logger.info(f"All results saved in: {output_dir}")
-    logger.info("=" * 60)
-    
-    sys.exit(0)
+    logger.info(f"Results saved in: {output_dir}")
+    return output_dir
 
 
 if __name__ == "__main__":
