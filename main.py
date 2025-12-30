@@ -113,6 +113,9 @@ def check_tool_exists(tool_name):
     
     # Check common binary locations (in case PATH not updated)
     common_paths = [
+        # Python venv bin directory (for pip-installed tools like arjun, xnLinkFinder)
+        os.path.join(sys.prefix, 'bin'),
+        os.path.join(sys.prefix, 'Scripts'),  # Windows venv
         # Go binaries
         os.path.expanduser("~/go/bin"),
         "/root/go/bin",
@@ -131,6 +134,16 @@ def check_tool_exists(tool_name):
         if os.path.isfile(tool_path) and os.access(tool_path, os.X_OK):
             return True
     
+    # For Python packages, also check if they can be run as modules
+    python_modules = ['arjun', 'xnLinkFinder', 'trufflehog']
+    if tool_name in python_modules:
+        try:
+            import importlib
+            importlib.import_module(tool_name.lower().replace('-', '_'))
+            return True
+        except ImportError:
+            pass
+    
     logger.error(f"Required tool '{tool_name}' not found in PATH")
     return False
 
@@ -143,6 +156,9 @@ def get_tool_path(tool_name):
     
     # Check common binary locations
     common_paths = [
+        # Python venv bin directory (for pip-installed tools)
+        os.path.join(sys.prefix, 'bin'),
+        os.path.join(sys.prefix, 'Scripts'),  # Windows venv
         # Go binaries
         os.path.expanduser("~/go/bin"),
         "/root/go/bin",
